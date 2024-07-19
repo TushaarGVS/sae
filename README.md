@@ -1,2 +1,1 @@
-# recurrentgemma-sae
-sparse autoencoder for recurrentgemma
+# sparse autoencoder
