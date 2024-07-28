@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "sae"
+version = "0.1.0"
+description = "sparse autoencoder for recurrentgemma"
+authors = ["Tushaar Gangavarapu <tg352@cornell.edu>"]
+repository = "https://github.com/TushaarGVS/sae"
+license = "MIT License"
+readme = "README.md"
+packages = [{ include = "recurrentgemma" },
+    { include = "sparse_autoencoder" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+torch = "^2.3.1"
+triton = "^2.3.1"
+numpy = "^1.26.4"
+blobfile = "^2.1.1"
+wandb = "^0.17.5"
+geom_median = { git = "https://github.com/krishnap25/geom_median.git" }
+matplotlib = "^3.9.1"
+sentencepiece = "^0.2.0"
+kagglehub = "^0.2.8"
+absl-py = "~1.4.0"
+einops = "^0.7.0"
+jaxtyping = "^0.2.28"
+datasets = "^2.20.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+include = '\.pyi?$'
