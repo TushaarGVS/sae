@@ -2,10 +2,15 @@
 # - recurrent layers: 0, 30
 # - attention layers: 2, 29
 #
+# Datasets:
+# - JeanKaddour/minipile (text_colname: text)
+# - codeparrot/github-code (text_colname: code)
+# - monology/pile-uncopyrighted (text_colname: text)
+#
 # CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
 # scripts/get_recurrentgemma_activations.py \
-#   --hf_dataset_id "codeparrot/github-code" \
-#   --text_colname "code" \
+#   --hf_dataset_id "JeanKaddour/minipile" \
+#   --text_colname "text" \
 #   --per_device_batch_size 4 \
 #   --model_id "9b" \
 #   --layer_nums 0 2 30 31 \
