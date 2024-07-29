@@ -237,7 +237,7 @@ if __name__ == "__main__":
         "--per_device_batch_size",
         type=int,
         help="Per-device batch size for streaming.",
-        default=4,
+        default=1,
     )
     parser.add_argument(
         "--model_id",
