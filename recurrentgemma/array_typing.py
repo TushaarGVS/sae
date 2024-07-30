@@ -13,8 +13,7 @@
 # limitations under the License.
 # ============================================================================
 """Common types used by layers and modules."""
-
-from typing import Callable, TypeVar, Mapping, Any
+from typing import Callable, TypeVar, Mapping, Any, Literal
 
 import jaxtyping as jt
 import torch
@@ -38,6 +37,10 @@ def typed(function: F) -> F:
 # n = number of heads for multi-query attention.
 # s = number of keys/values
 # h = head dimension
+
+# Model variant
+Variant = Literal["2b", "9b"]
+InstructionVariant = Literal["2b-it", "9b-it"]
 
 # General
 Activations = jt.Float[torch.Tensor, "*b t d"]

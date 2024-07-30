@@ -9,11 +9,11 @@
 #
 # CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
 # scripts/get_recurrentgemma_activations.py \
-#   --hf_dataset_id "JeanKaddour/minipile" \
-#   --text_colname "text" \
-#   --per_device_batch_size 4 \
-#   --model_id "9b" \
-#   --layer_nums 0 2 30 31 \
+#   --hf_dataset_id "JeanKaddour/minipile"  \
+#   --text_colname "text"                   \
+#   --per_device_batch_size 4               \
+#   --model_id "9b"                         \
+#   --layer_nums 0 2 30 31                  \
 #   --save_dir "/home/tg352/test"
 
 import json
@@ -81,6 +81,33 @@ def _load_model(
     return model
 
 
+@torch.no_grad()
+@torch.inference_mode()
+def _get_sampler(
+    model_id: at.Variant | at.InstructionVariant,
+    device: torch.device = torch.device("cuda"),
+    debug: bool = False,
+) -> recurrentgemma.Sampler:
+    weights_dir = Path(
+        kagglehub.model_download(f"google/recurrentgemma/pyTorch/{model_id}")
+    )
+    vocab = _load_vocab(weights_dir=weights_dir, debug=debug)
+    model = _load_model(
+        weights_dir=weights_dir,
+        model_id=model_id,
+        dtype=torch.bfloat16,
+        device=device,
+        debug=debug,
+    )
+    sampler = recurrentgemma.Sampler(
+        model=model,
+        vocab=vocab,
+        is_it_model=("it" in model_id),
+        greedy_sampling=True,
+    )
+    return sampler
+
+
 def _unpad_batch(
     batch_tensor: at.ExpandedActivations,
     pad_lengths: at.Tokens,
@@ -96,34 +123,12 @@ def _unpad_batch(
 @torch.inference_mode()
 def get_activations(
     input_strings: Sequence[str],
-    model_id: str = "2b",
+    sampler: recurrentgemma.Sampler,
     layer_nums: List[int] | None = None,
     unpad: bool = False,
     device: torch.device = torch.device("cuda"),
     debug: bool = False,
 ) -> Dict[str, List[torch.Tensor] | at.Tokens | Dict[str, List[torch.Tensor] | None]]:
-    weights_dir = Path(
-        kagglehub.model_download(f"google/recurrentgemma/pyTorch/{model_id}")
-    )
-    vocab = _load_vocab(weights_dir=weights_dir, debug=debug)
-    model = _load_model(
-        weights_dir=weights_dir,
-        model_id=model_id,
-        dtype=torch.bfloat16,
-        device=device,
-        debug=debug,
-    )
-    sampler = recurrentgemma.Sampler(
-        model=model,
-        vocab=vocab,
-        is_it_model="it" in model_id,
-        greedy_sampling=True,
-    )
-
-    if layer_nums is None:
-        print(f"[WARNING]\t {layer_nums=}; none specified, using all layers ...")
-        layer_nums = list(range(model.config.num_layers))
-
     all_input_ids = [sampler.tokenize(x, debug=False) for x in input_strings]
     input_lengths = torch.tensor(
         [len(input_ids) for input_ids in all_input_ids],
@@ -139,7 +144,7 @@ def get_activations(
     positions = positions - prompt_length + input_lengths[:, None]
     positions = torch.clip(positions, min=-1)  # -1: pad tokens
 
-    _, cache = model(
+    _, cache = sampler.model(
         tokens=padded_tokens,
         segment_pos=positions,
         cache=None,
@@ -174,24 +179,27 @@ def main(
     hf_dataset_id: str,
     text_colname: str = "text",
     per_device_batch_size: int = 4,
-    model_id: str = "2b",
+    model_id: at.Variant | at.InstructionVariant = "2b",
     layer_nums: List[int] | None = None,
     save_dir: str | None = None,
     debug: bool = False,
 ) -> None:
     assert save_dir is not None, f"{save_dir=} (not specified)"
+    fn_args = locals()
 
     local_rank, device = _init_dist()
     world_size = torch.distributed.get_world_size()
-    if local_rank == 0:
-        args = locals()
+    sampler = _get_sampler(model_id=model_id, device=device, debug=debug)
+    if layer_nums is None:
+        layer_nums = list(range(sampler.model.config.num_layers))
 
+    if local_rank == 0:
         os.makedirs(save_dir, exist_ok=True)
         os.makedirs(os.path.join(save_dir, "config"), exist_ok=True)
         os.makedirs(os.path.join(save_dir, "artefacts"), exist_ok=True)
 
         with open(os.path.join(save_dir, f"config/args.json"), "w") as fp:
-            json.dump(args, fp, default=repr, indent=4)
+            json.dump(fn_args, fp, default=repr, indent=4)
 
     hf_dataset = datasets.load_dataset(hf_dataset_id, streaming=True, split="train")
     hf_dataset = split_dataset_by_node(
@@ -201,12 +209,9 @@ def main(
 
     all_activations_dict = dict() if local_rank == 0 else None
     for batch_idx, batch in enumerate(tqdm(dataloader)):
-        if debug:
-            print(f"[DEBUG]\t [{local_rank=}/{world_size=}] {batch_idx=}")
-
         activations_dict = get_activations(
             input_strings=batch[text_colname],
-            model_id=model_id,
+            sampler=sampler,
             layer_nums=layer_nums,
             unpad=True,
             device=device,
@@ -229,7 +234,6 @@ def main(
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Extract activations from RecurrentGemma.")
-
     parser.add_argument(
         "--hf_dataset_id",
         type=str,
