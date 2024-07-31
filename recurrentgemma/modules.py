@@ -409,7 +409,8 @@ class LocalAttentionBlock(nn.Module):
           segment_pos: Positions of each token in the sequence.
           cache: Optional KV-cache for the block, of previous keys and values.
           return_cache: Whether to compute and return the updated cache.
-          return_xai_intermediates:
+          return_xai_intermediates: Whether to capture attention intermediates (unset
+          for now).
 
         Returns:
           Output of the block together with the updated cache. If `cache` is None

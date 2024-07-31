@@ -1,6 +1,10 @@
 # Layers (first, between 3/4 and 5/6 deep; see https://arxiv.org/pdf/2406.04093):
+# 9b, 9b-it:
 # - recurrent layers: 0, 30
 # - attention layers: 2, 29
+# 2b, 2b-it:
+# - recurrent layers: 0, 21
+# - attention layers: 2, 20
 #
 # Datasets:
 # - JeanKaddour/minipile (text_colname: text)
@@ -11,17 +15,18 @@
 # scripts/get_recurrentgemma_activations.py \
 #   --hf_dataset_id "JeanKaddour/minipile"  \
 #   --text_colname "text"                   \
-#   --per_device_batch_size 4               \
-#   --model_id "9b"                         \
-#   --layer_nums 0 2 30 31                  \
-#   --save_dir "/home/tg352/test"
+#   --per_device_batch_size 8               \
+#   --variant "2b"                          \
+#   --layer_nums 0 2 20 21                  \
+#   --save_dir "/home/tg352/sae/minipile/2b"
 
 import json
+import logging
 import os
 import pickle
 from argparse import ArgumentParser
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from typing import Sequence
 
 import datasets
@@ -36,73 +41,85 @@ from tqdm import tqdm
 import recurrentgemma
 import recurrentgemma.array_typing as at
 
+logger = logging.getLogger(__name__)
 
-def _init_dist(debug: bool = False) -> Tuple[int | None, torch.device | None]:
-    if int(os.environ.get("RANK", -1)) != -1:
-        dist.init_process_group("nccl")
-        local_rank = int(os.environ["LOCAL_RANK"])
-        return local_rank, torch.device("cuda", local_rank)
-    return None, None
+# Distributed inference setup.
+assert int(os.environ.get("RANK", -1)) != -1, "Distributed setup failed."
+dist.init_process_group("nccl")
 
-
-def _dist_cleanup(debug: bool = False):
-    dist.destroy_process_group()
+LOCAL_RANK = int(os.environ["LOCAL_RANK"])
+WORLD_SIZE = torch.distributed.get_world_size()
 
 
-def _load_vocab(weights_dir: Path, debug: bool = False) -> spm.SentencePieceProcessor:
+def _setup_logger(debug: bool = False):
+    mode = logging.INFO if debug else logging.WARNING
+    logging.basicConfig(
+        level=mode,
+        format="[{levelname}][{asctime}]\t {message}",
+        style="{",
+        datefmt="%m/%d %H:%M",
+    )
+
+
+def debug_on_master(msg: str):
+    if LOCAL_RANK == 0:
+        logger.info(msg=msg)
+
+
+def print_on_master(msg: str):
+    if LOCAL_RANK == 0:
+        print(msg)
+
+
+def load_vocab(weights_dir: Path) -> spm.SentencePieceProcessor:
     vocab_path = weights_dir / "tokenizer.model"
     vocab = spm.SentencePieceProcessor()
     vocab.Load(str(vocab_path))
-    if debug:
-        print(f"[DEBUG]\t {len(vocab)=}")
+    debug_on_master(f"Loaded vocab: {len(vocab)=}")
     return vocab
 
 
-def _load_model(
+def load_model(
     weights_dir: Path,
-    model_id: str,
+    variant: str,
     dtype: torch.dtype = torch.bfloat16,
     device: torch.device = torch.device("cpu"),
-    debug: bool = False,
 ) -> recurrentgemma.Griffin:
-    ckpt_path = weights_dir / f"{model_id}.pt"
+    ckpt_path = weights_dir / f"{variant}.pt"
     params = torch.load(str(ckpt_path))
     params = {key: value.to(device=device) for key, value in params.items()}
     preset = (
         recurrentgemma.Preset.RECURRENT_GEMMA_2B_V1
-        if "2b" in model_id
+        if "2b" in variant
         else recurrentgemma.Preset.RECURRENT_GEMMA_9B_V1
     )
     model_config = recurrentgemma.GriffinConfig.from_torch_params(params, preset=preset)
     model = recurrentgemma.Griffin(model_config, device=device, dtype=dtype)
     model.load_state_dict(params)
-    if debug:
-        print(f"[DEBUG]\t recurrentgemma-{model_id}\n{model_config}\n")
+    debug_on_master(f"Loaded model: recurrentgemma-{variant}\n{model_config}\n")
     return model
 
 
 @torch.no_grad()
 @torch.inference_mode()
-def _get_sampler(
-    model_id: at.Variant | at.InstructionVariant,
+def get_sampler(
+    variant: at.Variant | at.InstructionVariant,
     device: torch.device = torch.device("cuda"),
-    debug: bool = False,
 ) -> recurrentgemma.Sampler:
     weights_dir = Path(
-        kagglehub.model_download(f"google/recurrentgemma/pyTorch/{model_id}")
+        kagglehub.model_download(f"google/recurrentgemma/pyTorch/{variant}")
     )
-    vocab = _load_vocab(weights_dir=weights_dir, debug=debug)
-    model = _load_model(
+    vocab = load_vocab(weights_dir=weights_dir)
+    model = load_model(
         weights_dir=weights_dir,
-        model_id=model_id,
+        variant=variant,
         dtype=torch.bfloat16,
         device=device,
-        debug=debug,
     )
     sampler = recurrentgemma.Sampler(
         model=model,
         vocab=vocab,
-        is_it_model=("it" in model_id),
+        is_it_model=("it" in variant),
         greedy_sampling=True,
     )
     return sampler
@@ -112,7 +129,6 @@ def _unpad_batch(
     batch_tensor: at.ExpandedActivations,
     pad_lengths: at.Tokens,
     unpad: bool = True,
-    debug: bool = False,
 ) -> List[torch.Tensor] | torch.Tensor:
     if unpad:
         return [tensor[length:] for tensor, length in zip(batch_tensor, pad_lengths)]
@@ -127,7 +143,6 @@ def get_activations(
     layer_nums: List[int] | None = None,
     unpad: bool = False,
     device: torch.device = torch.device("cuda"),
-    debug: bool = False,
 ) -> Dict[str, List[torch.Tensor] | at.Tokens | Dict[str, List[torch.Tensor] | None]]:
     all_input_ids = [sampler.tokenize(x, debug=False) for x in input_strings]
     input_lengths = torch.tensor(
@@ -144,6 +159,7 @@ def get_activations(
     positions = positions - prompt_length + input_lengths[:, None]
     positions = torch.clip(positions, min=-1)  # -1: pad tokens
 
+    debug_on_master(f"{padded_tokens.shape=}\n{positions.shape=}")
     _, cache = sampler.model(
         tokens=padded_tokens,
         segment_pos=positions,
@@ -179,7 +195,7 @@ def main(
     hf_dataset_id: str,
     text_colname: str = "text",
     per_device_batch_size: int = 4,
-    model_id: at.Variant | at.InstructionVariant = "2b",
+    variant: at.Variant | at.InstructionVariant = "2b",
     layer_nums: List[int] | None = None,
     save_dir: str | None = None,
     debug: bool = False,
@@ -187,13 +203,14 @@ def main(
     assert save_dir is not None, f"{save_dir=} (not specified)"
     fn_args = locals()
 
-    local_rank, device = _init_dist()
-    world_size = torch.distributed.get_world_size()
-    sampler = _get_sampler(model_id=model_id, device=device, debug=debug)
+    device = torch.device("cuda", LOCAL_RANK)
+    sampler = get_sampler(variant=variant, device=device)
     if layer_nums is None:
         layer_nums = list(range(sampler.model.config.num_layers))
 
-    if local_rank == 0:
+    if LOCAL_RANK == 0:
+        _setup_logger(debug=debug)
+
         os.makedirs(save_dir, exist_ok=True)
         os.makedirs(os.path.join(save_dir, "config"), exist_ok=True)
         os.makedirs(os.path.join(save_dir, "artefacts"), exist_ok=True)
@@ -203,11 +220,11 @@ def main(
 
     hf_dataset = datasets.load_dataset(hf_dataset_id, streaming=True, split="train")
     hf_dataset = split_dataset_by_node(
-        hf_dataset, rank=local_rank, world_size=world_size
+        hf_dataset, rank=LOCAL_RANK, world_size=WORLD_SIZE
     )
     dataloader = DataLoader(hf_dataset, batch_size=per_device_batch_size)
 
-    all_activations_dict = dict() if local_rank == 0 else None
+    all_activations_dict = dict() if LOCAL_RANK == 0 else None
     for batch_idx, batch in enumerate(tqdm(dataloader)):
         activations_dict = get_activations(
             input_strings=batch[text_colname],
@@ -215,21 +232,19 @@ def main(
             layer_nums=layer_nums,
             unpad=True,
             device=device,
-            debug=(debug and local_rank == 0),
         )
         with open(
-            os.path.join(save_dir, f"artefacts/pid.{local_rank}-batch.{batch_idx}.pkl"),
+            os.path.join(save_dir, f"artefacts/pid.{LOCAL_RANK}-batch.{batch_idx}.pkl"),
             "wb",
         ) as fp:
             pickle.dump(activations_dict, fp)
 
+        debug_on_master(f"Running with {debug=}: stopping after batch=1")
         if debug:
-            if local_rank == 0:
-                print(f"[WARNING]\t running with {debug=}; stopping after first batch")
             break
 
-    print(f"activations saved to {save_dir}")
-    _dist_cleanup()
+    print_on_master(f"Activations saved to {save_dir}")
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":
@@ -249,10 +264,10 @@ if __name__ == "__main__":
         default=1,
     )
     parser.add_argument(
-        "--model_id",
+        "--variant",
         choices=["2b", "2b-it", "9b", "9b-it"],
-        default="2b-it",
-        help="RecurrentGemma model identifier.",
+        default="2b",
+        help="RecurrentGemma model variant.",
     )
     parser.add_argument(
         "--layer_nums",
@@ -268,7 +283,7 @@ if __name__ == "__main__":
         hf_dataset_id=args.hf_dataset_id,
         text_colname=args.text_colname,
         per_device_batch_size=args.per_device_batch_size,
-        model_id=args.model_id,
+        variant=args.variant,
         layer_nums=args.layer_nums,
         save_dir=args.save_dir,
         debug=args.debug,
