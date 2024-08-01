@@ -39,8 +39,7 @@ def typed(function: F) -> F:
 # h = head dimension
 
 # Model variant
-Variant = Literal["2b", "9b"]
-InstructionVariant = Literal["2b-it", "9b-it"]
+Variant = Literal["2b", "9b", "2b-it", "9b-it"]
 
 # General
 Activations = jt.Float[torch.Tensor, "*b t d"]

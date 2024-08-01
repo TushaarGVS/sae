@@ -12,14 +12,14 @@
 # - monology/pile-uncopyrighted (text_colname: text)
 #
 # CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
-# scripts/get_recurrentgemma_activations.py \
-#   --hf_dataset_id "JeanKaddour/minipile"  \
-#   --text_colname "text"                   \
-#   --per_device_batch_size 8               \
-#   --max_len 8192                          \
-#   --variant "9b"                          \
-#   --layer_nums 0 2 29 30                  \
-#   --save_dir "/home/tg352/sae/minipile/9b"
+# scripts/get_recurrentgemma_activations.py         \
+#   --hf_dataset_id "JeanKaddour/minipile"          \
+#   --text_colname "text"                           \
+#   --per_device_batch_size 4                       \
+#   --max_len 8192                                  \
+#   --variant "2b"                                  \
+#   --layer_nums 0 2 20 21                          \
+#   --save_dir "/share/rush/tg352/sae/minipile/2b"
 
 import json
 import os
@@ -91,7 +91,7 @@ def load_model(
 @torch.no_grad()
 @torch.inference_mode()
 def get_sampler(
-    variant: at.Variant | at.InstructionVariant,
+    variant: at.Variant,
     device: torch.device = torch.device("cuda"),
 ) -> recurrentgemma.Sampler:
     weights_dir = Path(
@@ -185,7 +185,7 @@ def main(
     text_colname: str = "text",
     per_device_batch_size: int = 4,
     max_len: int = 8192,
-    variant: at.Variant | at.InstructionVariant = "2b",
+    variant: at.Variant = "2b",
     layer_nums: List[int] | None = None,
     save_dir: str | None = None,
 ) -> None:
