@@ -16,12 +16,12 @@
 #   --hf_dataset_id "JeanKaddour/minipile"  \
 #   --text_colname "text"                   \
 #   --per_device_batch_size 8               \
-#   --variant "2b"                          \
-#   --layer_nums 0 2 20 21                  \
-#   --save_dir "/home/tg352/sae/minipile/2b"
+#   --max_len 8192                          \
+#   --variant "9b"                          \
+#   --layer_nums 0 2 29 30                  \
+#   --save_dir "/home/tg352/sae/minipile/9b"
 
 import json
-import logging
 import os
 import pickle
 from argparse import ArgumentParser
@@ -41,8 +41,6 @@ from tqdm import tqdm
 import recurrentgemma
 import recurrentgemma.array_typing as at
 
-logger = logging.getLogger(__name__)
-
 # Distributed inference setup.
 assert int(os.environ.get("RANK", -1)) != -1, "Distributed setup failed."
 dist.init_process_group("nccl")
@@ -51,19 +49,9 @@ LOCAL_RANK = int(os.environ["LOCAL_RANK"])
 WORLD_SIZE = torch.distributed.get_world_size()
 
 
-def _setup_logger(debug: bool = False):
-    mode = logging.INFO if debug else logging.WARNING
-    logging.basicConfig(
-        level=mode,
-        format="[{levelname}][{asctime}]\t {message}",
-        style="{",
-        datefmt="%m/%d %H:%M",
-    )
-
-
 def debug_on_master(msg: str):
-    if LOCAL_RANK == 0:
-        logger.info(msg=msg)
+    if LOCAL_RANK == 0 and DEBUG:
+        print(msg)
 
 
 def print_on_master(msg: str):
@@ -140,11 +128,12 @@ def _unpad_batch(
 def get_activations(
     input_strings: Sequence[str],
     sampler: recurrentgemma.Sampler,
+    max_len: int = 8192,
     layer_nums: List[int] | None = None,
     unpad: bool = False,
     device: torch.device = torch.device("cuda"),
 ) -> Dict[str, List[torch.Tensor] | at.Tokens | Dict[str, List[torch.Tensor] | None]]:
-    all_input_ids = [sampler.tokenize(x, debug=False) for x in input_strings]
+    all_input_ids = [sampler.tokenize(x)[-max_len:] for x in input_strings]
     input_lengths = torch.tensor(
         [len(input_ids) for input_ids in all_input_ids],
         device=device,
@@ -195,10 +184,10 @@ def main(
     hf_dataset_id: str,
     text_colname: str = "text",
     per_device_batch_size: int = 4,
+    max_len: int = 8192,
     variant: at.Variant | at.InstructionVariant = "2b",
     layer_nums: List[int] | None = None,
     save_dir: str | None = None,
-    debug: bool = False,
 ) -> None:
     assert save_dir is not None, f"{save_dir=} (not specified)"
     fn_args = locals()
@@ -209,8 +198,6 @@ def main(
         layer_nums = list(range(sampler.model.config.num_layers))
 
     if LOCAL_RANK == 0:
-        _setup_logger(debug=debug)
-
         os.makedirs(save_dir, exist_ok=True)
         os.makedirs(os.path.join(save_dir, "config"), exist_ok=True)
         os.makedirs(os.path.join(save_dir, "artefacts"), exist_ok=True)
@@ -226,9 +213,15 @@ def main(
 
     all_activations_dict = dict() if LOCAL_RANK == 0 else None
     for batch_idx, batch in enumerate(tqdm(dataloader)):
+        debug_on_master(
+            f"{'-' * 10}\n"
+            f"[{LOCAL_RANK=}/{WORLD_SIZE=}] {batch_idx=}\n"
+            f"{batch[text_colname][0][:100]} ...\n"
+        )
         activations_dict = get_activations(
             input_strings=batch[text_colname],
             sampler=sampler,
+            max_len=max_len,
             layer_nums=layer_nums,
             unpad=True,
             device=device,
@@ -238,10 +231,6 @@ def main(
             "wb",
         ) as fp:
             pickle.dump(activations_dict, fp)
-
-        debug_on_master(f"Running with {debug=}: stopping after batch=1")
-        if debug:
-            break
 
     print_on_master(f"Activations saved to {save_dir}")
     dist.destroy_process_group()
@@ -264,6 +253,12 @@ if __name__ == "__main__":
         default=1,
     )
     parser.add_argument(
+        "--max_len",
+        type=int,
+        help="Max sequence length to run recurrentgemma on (maily for CUDA memory management).",
+        default=8192,
+    )
+    parser.add_argument(
         "--variant",
         choices=["2b", "2b-it", "9b", "9b-it"],
         default="2b",
@@ -279,12 +274,15 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true", help="Run in debug mode.")
     args = parser.parse_args()
 
+    # Set a global `DEBUG` variable.
+    DEBUG = args.debug
+
     main(
         hf_dataset_id=args.hf_dataset_id,
         text_colname=args.text_colname,
         per_device_batch_size=args.per_device_batch_size,
+        max_len=args.max_len,
         variant=args.variant,
         layer_nums=args.layer_nums,
         save_dir=args.save_dir,
-        debug=args.debug,
     )

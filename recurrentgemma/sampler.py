@@ -187,7 +187,7 @@ class Sampler:
         )
 
     @at.typed
-    def tokenize(self, input_string: str, debug: bool = False) -> torch.Tensor:
+    def tokenize(self, input_string: str) -> torch.Tensor:
         """Tokenizes the input string."""
         if self._is_it_model:
             input_string = common.apply_it_formatter(input_string)
@@ -198,10 +198,6 @@ class Sampler:
             dtype=torch.int32,
             device=self.device,
         )
-
-        if debug:
-            print(f"(processed) input_string: {input_string[:50]} ...")
-            print(f"{input_ids.shape=}")
         return input_ids
 
     @at.typed
@@ -227,7 +223,6 @@ class Sampler:
         total_generation_steps: int,
         return_logits: bool,
         echo: bool,
-        debug: bool = False,
     ) -> SamplingState:
         """Pre-processes the prompt."""
         factory_kwargs = dict(device=self.device, dtype=torch.int32)
@@ -238,10 +233,6 @@ class Sampler:
         positions = torch.repeat_interleave(positions[None], batch_size, dim=0)
         positions = positions - prompt_length + input_lengths[:, None]
         positions = torch.clip(positions, min=-1)
-        if debug:
-            print(f"{batch_size=}, {prompt_length=}")
-            print(f"{input_lengths=}")
-            print(f"{positions.shape=}")
 
         # Actual prompt processing.
         if total_generation_steps == 0:
