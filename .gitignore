@@ -1,3 +1,8 @@
+# Slurm jobs, etc.
+# submit.sh
+slurm*.out
+*/slurm*.out
+
 # Build artefacts, Poetry lock files, etc.
 poetry.lock
 

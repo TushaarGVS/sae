@@ -1,0 +1,122 @@
+<!doctype html>
+
+<head>
+    <title>
+        {% block title %} {% endblock %}
+    </title>
+
+    <!-- fonts -->
+    <link href="https://fonts.googleapis.com" rel="preconnect">
+    <link crossorigin href="https://fonts.gstatic.com" rel="preconnect">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@700&display=swap" rel="stylesheet">
+
+    <!-- jquery -->
+    <script crossorigin="anonymous"
+            integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8="
+            src="https://code.jquery.com/jquery-3.6.4.min.js">
+    </script>
+
+    <!-- mathjax -->
+    <script crossorigin="anonymous"
+            integrity="sha512-VW8/i4IZkHxdD8OlqNdF7fGn3ba0+lYqag+Uy4cG6BtJ/LIr8t23s/vls70pQ41UasHH0tL57GQfKDApqc9izA=="
+            referrerpolicy="no-referrer"
+            src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.js">
+    </script>
+
+    <style>
+        * {
+            font-family: Times;
+        }
+
+        input[type=number] {
+            width: 5em;
+        }
+
+        small {
+            font-size: medium;
+        }
+
+        p {
+            width: 835px;
+        }
+
+        span.visualize_pos {
+            --activation: 0;
+
+            border-width: 1px;
+            border-style: solid;
+            border-color: rgba(0, 0, 0, 0.5);
+
+            background-color: rgba(0, 255, 0, var(--activation));
+        }
+
+        span.visualize_neg {
+            --activation: 0;
+
+            border-width: 1px;
+            border-style: solid;
+            border-color: rgba(0, 0, 0, 0.5);
+
+            background-color: rgba(255, 0, 0, var(--activation));
+        }
+
+        span.not-bold {
+            font-weight: normal
+        }
+
+        br {
+            --attention: 0;
+        }
+
+        input[type=checkbox], label {
+            vertical-align: top;
+        }
+
+        td {
+            vertical-align: top;
+        }
+
+        .tooltip {
+            position: relative;
+            display: inline-block;
+            border-bottom: 1px dotted black;
+        }
+
+        .tooltip .tooltip-text {
+            visibility: hidden;
+            width: 200px;
+            background-color: #dcdcdc;
+            color: #000;
+            text-align: center;
+            border-radius: 3px;
+            padding: 4px 0;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -60px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: small;
+        }
+
+        .tooltip .tooltip-text::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #555 transparent transparent transparent;
+        }
+
+        .tooltip:hover .tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+{% block body %} {% endblock %}
+</body>

@@ -1,0 +1,141 @@
+{% extends 'base.html' %}
+
+{% block title %}
+recurrentgemma sae
+{% endblock %}
+
+{% block body %}
+<body>
+<h2>recurrentgemma sae</h2>
+
+<table>
+    <tr>
+        <td>
+            filename:
+            <input id="filename" placeholder="pid.0-batch.0.pkl.gz" size="40" type="text"></input>
+        </td>
+    </tr>
+    <tr>
+        <td>
+            <label for="variant">variant:</label>
+            <select id="variant">
+                <option value="2b">2b</option>
+                <option value="2b-it">2b-it</option>
+                <option selected value="9b">9b</option>
+                <option value="9b-it">9b-it</option>
+            </select>
+        </td>
+    </tr>
+    <tr>
+        <td>
+            <br/>
+            <button onclick="visualize_raw_activations();">raw activations</button>
+            <button onclick="visualize_sae_activations();">sae activations</button>
+            <span id="loader">(processing ...)</span>
+        </td>
+    </tr>
+</table>
+
+<br/>
+<hr>
+
+<h3>activations</h3>
+
+<table>
+    <tr>
+        <td>
+            instance: <input id="instance" max="4" min="0" type="number" value="0">
+        </td>
+    </tr>
+    <tr>
+        <td>
+            layer: <input id="layer" max="37" min="0" type="number" value="30">
+        </td>
+        <td>
+            neuron: <input id="neuron" max="4095" min="0" type="number" value="1000">
+        </td>
+    </tr>
+    <tr>
+        <td>
+            <label for="state_type">which:</label>
+            <select id="state_type">
+                <option value="rg-lru">rg-lru</option>
+                <option selected value="mlp">mlp</option>
+            </select>
+        </td>
+    </tr>
+</table>
+
+<br/>
+<button onclick="reload();">reload activations</button>
+<br/>
+
+<p id="content"></p>
+
+<script>
+    $('#loader').hide()
+
+    const content = document.querySelector('#content')
+
+    function visualize_raw_activations() {
+        const filename = document.getElementById("filename").value
+        const variant = document.getElementById("variant").value
+
+        $.ajax({
+            type: "POST",
+            async: false,
+            url: "{{ url_for('visualize_raw_activations') }}",
+            data: {
+                filename: filename,
+                variant: variant
+            },
+            success: visualize,
+        })
+    }
+
+    function visualize_sae_activations() {
+    }
+
+    var _activation_values = []
+
+    function reset() {
+        _activation_values = []
+        content.innerHTML = ""
+    }
+
+    function visualize(response) {
+        reset()
+
+        const instance = document.getElementById("instance").value
+        const layer = document.getElementById("layer").value
+        const neuron = document.getElementById("neuron").value
+        const state_type = document.getElementById("state_type").value
+
+        const activations_dict = JSON.parse(response)
+        const tokens = activations_dict["tokens"][instance]
+        const activation_scores = activations_dict[`blocks.${layer}`][state_type][instance]
+
+        tokens.forEach((token_str, i) => {
+            const token = document.createElement("span")
+            token.innerText = token_str
+            if (activation_scores[i] < 0) {
+                token.classList.add("visualize_neg")
+            } else {
+                token.classList.add("visualize_pos")
+            }
+            content.appendChild(token)
+
+            var multiplier = 1.0
+            _activation_values.push(activation_scores[i] * multiplier)
+        })
+        highlight_activations()
+    }
+
+    function highlight_activations() {
+        Array.from(content.children).forEach((node, i) => {
+            node.style.setProperty('--activation', _activation_values[i].toFixed(5))
+        })
+    }
+</script>
+</body>
+{% endblock %}

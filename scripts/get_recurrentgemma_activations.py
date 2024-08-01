@@ -21,6 +21,7 @@
 #   --layer_nums 0 2 20 21                          \
 #   --save_dir "/share/rush/tg352/sae/minipile/2b"
 
+import gzip
 import json
 import os
 import pickle
@@ -159,8 +160,12 @@ def get_activations(
     )
 
     activations_dict = dict(
-        input_ids=(all_input_ids if unpad else padded_tokens),
-        pad_lengths=(None if unpad else pad_lengths),
+        input_ids=(
+            [input_ids.cpu() for input_ids in all_input_ids]
+            if unpad
+            else padded_tokens.cpu()
+        ),
+        pad_lengths=(None if unpad else pad_lengths.cpu()),
     )
     for layer_num in layer_nums:
         block_id = f"blocks.{layer_num}"
@@ -226,8 +231,10 @@ def main(
             unpad=True,
             device=device,
         )
-        with open(
-            os.path.join(save_dir, f"artefacts/pid.{LOCAL_RANK}-batch.{batch_idx}.pkl"),
+        with gzip.open(
+            os.path.join(
+                save_dir, f"artefacts/pid.{LOCAL_RANK}-batch.{batch_idx}.pkl.gz"
+            ),
             "wb",
         ) as fp:
             pickle.dump(activations_dict, fp)
@@ -255,7 +262,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_len",
         type=int,
-        help="Max sequence length to run recurrentgemma on (maily for CUDA memory management).",
+        help="Max sequence length to run recurrentgemma on (mainly for CUDA memory).",
         default=8192,
     )
     parser.add_argument(
