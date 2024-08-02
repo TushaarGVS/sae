@@ -7,6 +7,7 @@ from pathlib import Path
 
 import kagglehub
 import sentencepiece as spm
+import torch
 from flask import Flask, request, render_template
 
 import recurrentgemma.array_typing as at
@@ -28,6 +29,13 @@ def load_vocab(
     vocab = spm.SentencePieceProcessor()
     vocab.Load(str(vocab_path))
     return vocab
+
+
+def normalize(activations: torch.Tensor, length_dim: int = 0) -> torch.Tensor:
+    """Normalize within [-1, 1]."""
+    min_vals = torch.min(activations, dim=length_dim).values
+    max_vals = torch.max(activations, dim=length_dim).values
+    return 2 * ((activations - min_vals) / (max_vals - min_vals + 1e-5)) - 1
 
 
 @app.route("/")
@@ -61,7 +69,7 @@ def visualize_raw_activations():
                 activation_tensors_list = activations_dict[key][activation_type]
                 if activation_tensors_list is not None:
                     return_dict[key][activation_type] = [
-                        activations_tensor.tolist()
+                        normalize(activations_tensor).tolist()
                         for activations_tensor in activation_tensors_list
                     ]
     return json.dumps(return_dict)

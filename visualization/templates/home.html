@@ -31,7 +31,7 @@ recurrentgemma sae
             <br/>
             <button onclick="visualize_raw_activations();">raw activations</button>
             <button onclick="visualize_sae_activations();">sae activations</button>
-            <span id="loader">(processing ...)</span>
+            <span id="loader">&nbsp;&nbsp;(processing ...)</span>
         </td>
     </tr>
 </table>
@@ -50,8 +50,7 @@ recurrentgemma sae
     <tr>
         <td>
             layer: <input id="layer" max="37" min="0" type="number" value="30">
-        </td>
-        <td>
+            &nbsp;
             neuron: <input id="neuron" max="4095" min="0" type="number" value="1000">
         </td>
     </tr>
@@ -88,29 +87,31 @@ recurrentgemma sae
 
         $.ajax({
             type: "POST",
-            async: false,
+            async: true,
             url: "{{ url_for('visualize_raw_activations') }}",
             data: {
                 filename: filename,
-                variant: variant
+                variant: variant,
             },
             beforeSend: function () {
                 $("#loader").show()
             },
-            success: set_activations_dict,
+            success: function (response) {
+                set_activations_dict(response)
+                visualize()
+            },
             error: function () {
                 $("#loader").hide()
-            },
+            }
         })
-        visualize()
     }
 
     function visualize_sae_activations() {
     }
 
     function set_activations_dict(response) {
-        $("#loader").hide()
         activations_dict = JSON.parse(response)
+        $("#loader").hide()
     }
 
     function visualize() {
@@ -136,15 +137,12 @@ recurrentgemma sae
 
         content.appendChild(document.createElement("br"))
         _activation_values.push(0.0)
+        content.appendChild(document.createElement("br"))
+        _activation_values.push(0.0)
 
         tokens.forEach((token_str, i) => {
-            if (i % 25 === 0) {
-                content.appendChild(document.createElement("br"))
-                _activation_values.push(0.0)
-            }
-
             const token = document.createElement("span")
-            token.innerText = token_str
+            token.innerText = token_str.replaceAll("▁", " ")
 
             var activation_value = parseFloat(activation_scores[i][neuron])
             var multiplier = 1.0
@@ -157,6 +155,7 @@ recurrentgemma sae
             }
             content.appendChild(token)
         })
+
         highlight_activations()
     }
 
