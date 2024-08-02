@@ -79,13 +79,13 @@ recurrentgemma sae
     function visualize_raw_activations() {
         // Reset the `activations_dicts`.
         activations_dicts = []
+        reset()
 
         const filenames = document.getElementById("filenames").value.split(",")
         const variant = document.getElementById("variant").value
 
         filenames.forEach((filename, file_idx) => {
             activations_dicts.push({})
-            console.log(activations_dicts)
             $.ajax({
                 type: "POST",
                 async: true,
@@ -99,7 +99,7 @@ recurrentgemma sae
                 },
                 success: function (response) {
                     set_activations_dict(response, file_idx)
-                    visualize()
+                    visualize(activations_dicts[file_idx], file_idx)
                 },
                 error: function () {
                     $("#loader").text("(processing ...)").hide()
@@ -116,66 +116,63 @@ recurrentgemma sae
         activations_dicts[file_idx] = JSON.parse(response)
     }
 
-    function visualize() {
-        reset()
-
+    function visualize(activations_dict, file_idx) {
         const layer = document.getElementById("layer").value
         const neuron = document.getElementById("neuron").value
         const activation_type = document.getElementById("activation_type").value
 
-        activations_dicts.forEach((activations_dict, act_idx) => {
-            const tokens = activations_dict["tokens"][0]
-            const activation_scores = activations_dict[`blocks.${layer}`][activation_type][0]
+        const tokens = activations_dict["tokens"][0]
+        const activation_scores = activations_dict[`blocks.${layer}`][activation_type][0]
 
-            console.log(`layer=${layer}`)
-            console.log(`neuron=${neuron}`)
-            console.log(`activation_type=${activation_type}`)
+        console.log(`layer=${layer}`)
+        console.log(`neuron=${neuron}`)
+        console.log(`activation_type=${activation_type}`)
 
-            if (act_idx > 0) {
-                content.appendChild(document.createElement("br"))
-                _activation_values.push(0.0)
-                content.appendChild(document.createElement("br"))
-                _activation_values.push(0.0)
+        if (file_idx > 0) {
+            content.appendChild(document.createElement("br"))
+            _activation_values.push(0.0)
+            content.appendChild(document.createElement("br"))
+            _activation_values.push(0.0)
 
-                const hr_small = document.createElement("hr")
-                hr_small.classList.add("small")
-                content.appendChild(hr_small)
-                _activation_values.push(0.0)
+            const hr_small = document.createElement("hr")
+            hr_small.classList.add("small")
+            content.appendChild(hr_small)
+            _activation_values.push(0.0)
 
-                content.appendChild(document.createElement("br"))
-                _activation_values.push(0.0)
+            content.appendChild(document.createElement("br"))
+            _activation_values.push(0.0)
+        }
+
+        const seq_len = document.createElement("span")
+        seq_len.innerHTML = `(sequence length: ${tokens.length})`
+        content.appendChild(seq_len)
+        _activation_values.push(0.0)
+
+        content.appendChild(document.createElement("br"))
+        _activation_values.push(0.0)
+        content.appendChild(document.createElement("br"))
+        _activation_values.push(0.0)
+
+        tokens.forEach((token_str, tok_idx) => {
+            const token = document.createElement("span")
+            token.innerText = token_str.replaceAll("▁", " ")
+
+            var activation_value = parseFloat(activation_scores[tok_idx][neuron])
+            var multiplier = 1.0
+            if (activation_value < 0) {
+                token.classList.add("visualize_neg")
+                _activation_values.push(-1 * activation_value * multiplier)
+            } else {
+                token.classList.add("visualize_pos")
+                _activation_values.push(activation_value * multiplier)
             }
-
-            const seq_len = document.createElement("span")
-            seq_len.innerHTML = `(sequence length: ${tokens.length})`
-            content.appendChild(seq_len)
-            _activation_values.push(0.0)
-
-            content.appendChild(document.createElement("br"))
-            _activation_values.push(0.0)
-            content.appendChild(document.createElement("br"))
-            _activation_values.push(0.0)
-
-            tokens.forEach((token_str, tok_idx) => {
-                const token = document.createElement("span")
-                token.innerText = token_str.replaceAll("▁", " ")
-
-                var activation_value = parseFloat(activation_scores[tok_idx][neuron])
-                var multiplier = 1.0
-                if (activation_value < 0) {
-                    token.classList.add("visualize_neg")
-                    _activation_values.push(-1 * activation_value * multiplier)
-                } else {
-                    token.classList.add("visualize_pos")
-                    _activation_values.push(activation_value * multiplier)
-                }
-                content.appendChild(token)
-            })
-
-            highlight_activations()
+            content.appendChild(token)
         })
 
-        $("#loader").text("(processing ...)").hide()
+        if (file_idx === activations_dicts.length - 1) {
+            highlight_activations()
+            $("#loader").text("(processing ...)").hide()
+        }
     }
 
     function highlight_activations() {
@@ -185,7 +182,10 @@ recurrentgemma sae
     }
 
     function reload() {
-        visualize()
+        reset()
+        activations_dicts.forEach((activations_dict, act_idx) => {
+            visualize(activations_dict, act_idx)
+        })
     }
 
     function reset() {
