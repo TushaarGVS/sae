@@ -73,11 +73,12 @@ recurrentgemma sae
 <p id="content"></p>
 
 <script>
-    $('#loader').hide()
+    $("#loader").hide()
 
     const content = document.querySelector('#content')
 
     var activations_dict = null
+    var _activation_values = []
 
     function visualize_raw_activations() {
         activations_dict = {}
@@ -93,7 +94,13 @@ recurrentgemma sae
                 filename: filename,
                 variant: variant
             },
+            beforeSend: function () {
+                $("#loader").show()
+            },
             success: set_activations_dict,
+            error: function () {
+                $("#loader").hide()
+            },
         })
         visualize()
     }
@@ -102,10 +109,9 @@ recurrentgemma sae
     }
 
     function set_activations_dict(response) {
+        $("#loader").hide()
         activations_dict = JSON.parse(response)
     }
-
-    var _activation_values = []
 
     function visualize() {
         reset()
@@ -130,10 +136,13 @@ recurrentgemma sae
 
         content.appendChild(document.createElement("br"))
         _activation_values.push(0.0)
-        content.appendChild(document.createElement("br"))
-        _activation_values.push(0.0)
 
         tokens.forEach((token_str, i) => {
+            if (i % 25 === 0) {
+                content.appendChild(document.createElement("br"))
+                _activation_values.push(0.0)
+            }
+
             const token = document.createElement("span")
             token.innerText = token_str
 
