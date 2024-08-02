@@ -2,7 +2,7 @@ import gzip
 import json
 import os
 import pickle
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 import kagglehub
@@ -18,7 +18,7 @@ ACTIVATIONS_DIR: str = f"/share/rush/tg352/sae/{DATASET}"
 app = Flask(__name__)
 
 
-@lru_cache(1)
+@cache
 def load_vocab(
     variant: at.Variant,
 ) -> spm.SentencePieceProcessor:
@@ -31,11 +31,19 @@ def load_vocab(
     return vocab
 
 
-def normalize(activations: torch.Tensor, length_dim: int = 0) -> torch.Tensor:
+def normalize(
+    activations: torch.Tensor, length_dim: int = 0, min_max: bool = False
+) -> torch.Tensor:
     """Normalize within [-1, 1]."""
-    min_vals = torch.min(activations, dim=length_dim).values
-    max_vals = torch.max(activations, dim=length_dim).values
-    return 2 * ((activations - min_vals) / (max_vals - min_vals + 1e-5)) - 1
+    if min_max:
+        min_vals = torch.min(activations, dim=length_dim).values
+        max_vals = torch.max(activations, dim=length_dim).values
+        return 2 * ((activations - min_vals) / (max_vals - min_vals + 1e-5)) - 1
+    else:
+        mean_vals = torch.mean(activations, dim=length_dim)
+        std_vals = torch.std(activations, dim=length_dim)
+        normalized_activations = (activations - mean_vals) / (std_vals + 1e-5)
+        return 2 * (1 / (1 + torch.exp(-normalized_activations))) - 1
 
 
 @app.route("/")
@@ -43,6 +51,7 @@ def home():
     return render_template("home.html")
 
 
+@cache
 @app.route("/visualize_raw_activations", methods=["POST"])
 def visualize_raw_activations():
     filename: str = request.form.get("filename")
