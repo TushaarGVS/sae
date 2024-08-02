@@ -11,8 +11,8 @@ from flask import Flask, request, render_template
 
 import recurrentgemma.array_typing as at
 
-VARIANT: at.Variant = "2b"
-ACTIVATIONS_DIR: str = f"/share/rush/tg352/sae/minipile/{VARIANT}/artefacts"
+DATASET: str = "minipile"
+ACTIVATIONS_DIR: str = f"/share/rush/tg352/sae/{DATASET}"
 
 app = Flask(__name__)
 
@@ -42,17 +42,30 @@ def visualize_raw_activations():
 
     vocab = load_vocab(variant=variant)
     activations_dict = pickle.load(
-        gzip.open(os.path.join(ACTIVATIONS_DIR, filename), "rb")
+        gzip.open(
+            os.path.join(ACTIVATIONS_DIR, f"{variant}/artefacts/{filename}"), "rb"
+        )
     )
     all_input_ids = activations_dict.pop("input_ids")
-    if len(all_input_ids) > 1:
-        print("more than one inst in the file; visualizing only the first inst")
-    activations_dict["tokens"] = [
-        [vocab.IdToPiece(input_id) for input_id in input_ids.tolist()]
-        for input_ids in all_input_ids
-    ]
-    return json.dumps(activations_dict)
+
+    return_dict = {
+        "tokens": [
+            [vocab.IdToPiece(input_id) for input_id in input_ids.tolist()]
+            for input_ids in all_input_ids
+        ]
+    }
+    for key in activations_dict.keys():
+        if key.startswith("blocks"):
+            return_dict[key] = {}
+            for activation_type in activations_dict[key].keys():
+                activation_tensors_list = activations_dict[key][activation_type]
+                if activation_tensors_list is not None:
+                    return_dict[key][activation_type] = [
+                        activations_tensor.tolist()
+                        for activations_tensor in activation_tensors_list
+                    ]
+    return json.dumps(return_dict)
 
 
 if __name__ == "__main__":
-    app.run(8000)
+    app.run(port=8000)

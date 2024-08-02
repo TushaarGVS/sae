@@ -57,10 +57,10 @@ recurrentgemma sae
     </tr>
     <tr>
         <td>
-            <label for="state_type">which:</label>
-            <select id="state_type">
-                <option value="rg-lru">rg-lru</option>
-                <option selected value="mlp">mlp</option>
+            <label for="activation_type">activation type:</label>
+            <select id="activation_type">
+                <option value="rg_lru_states">rg-lru</option>
+                <option selected value="mlp_activations">mlp</option>
             </select>
         </td>
     </tr>
@@ -68,7 +68,7 @@ recurrentgemma sae
 
 <br/>
 <button onclick="reload();">reload activations</button>
-<br/>
+<br/><br/>
 
 <p id="content"></p>
 
@@ -77,7 +77,11 @@ recurrentgemma sae
 
     const content = document.querySelector('#content')
 
+    var activations_dict = null
+
     function visualize_raw_activations() {
+        activations_dict = {}
+
         const filename = document.getElementById("filename").value
         const variant = document.getElementById("variant").value
 
@@ -89,44 +93,60 @@ recurrentgemma sae
                 filename: filename,
                 variant: variant
             },
-            success: visualize,
+            success: set_activations_dict,
         })
+        visualize()
     }
 
     function visualize_sae_activations() {
     }
 
-    var _activation_values = []
-
-    function reset() {
-        _activation_values = []
-        content.innerHTML = ""
+    function set_activations_dict(response) {
+        activations_dict = JSON.parse(response)
     }
 
-    function visualize(response) {
+    var _activation_values = []
+
+    function visualize() {
         reset()
 
         const instance = document.getElementById("instance").value
         const layer = document.getElementById("layer").value
         const neuron = document.getElementById("neuron").value
-        const state_type = document.getElementById("state_type").value
+        const activation_type = document.getElementById("activation_type").value
 
-        const activations_dict = JSON.parse(response)
         const tokens = activations_dict["tokens"][instance]
-        const activation_scores = activations_dict[`blocks.${layer}`][state_type][instance]
+        const activation_scores = activations_dict[`blocks.${layer}`][activation_type][instance]
+
+        console.log(`instance=${instance}`)
+        console.log(`layer=${layer}`)
+        console.log(`neuron=${neuron}`)
+        console.log(`activation_type=${activation_type}`)
+
+        const seq_len = document.createElement("span")
+        seq_len.innerHTML = `(sequence length: ${tokens.length})`
+        content.appendChild(seq_len)
+        _activation_values.push(0.0)
+
+        content.appendChild(document.createElement("br"))
+        _activation_values.push(0.0)
+        content.appendChild(document.createElement("br"))
+        _activation_values.push(0.0)
 
         tokens.forEach((token_str, i) => {
             const token = document.createElement("span")
             token.innerText = token_str
-            if (activation_scores[i] < 0) {
+
+            var activation_value = parseFloat(activation_scores[i][neuron])
+            var multiplier = 1.0
+            if (activation_value < 0) {
                 token.classList.add("visualize_neg")
+                _activation_values.push(-1 * activation_value * multiplier)
             } else {
                 token.classList.add("visualize_pos")
+                _activation_values.push(activation_value * multiplier)
             }
             content.appendChild(token)
-
-            var multiplier = 1.0
-            _activation_values.push(activation_scores[i] * multiplier)
         })
         highlight_activations()
     }
@@ -135,6 +155,15 @@ recurrentgemma sae
         Array.from(content.children).forEach((node, i) => {
             node.style.setProperty('--activation', _activation_values[i].toFixed(5))
         })
+    }
+
+    function reload() {
+        visualize()
+    }
+
+    function reset() {
+        _activation_values = []
+        content.innerHTML = ""
     }
 </script>
 </body>
