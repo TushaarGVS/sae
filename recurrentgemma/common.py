@@ -54,30 +54,61 @@ class Preset(enum.Enum):
     @property
     def config_dict(self) -> dict[str, Any]:
         griffin_pattern = itertools.cycle(
-            [TemporalBlockType.RECURRENT, TemporalBlockType.RECURRENT, TemporalBlockType.ATTENTION, ])
+            [
+                TemporalBlockType.RECURRENT,
+                TemporalBlockType.RECURRENT,
+                TemporalBlockType.ATTENTION,
+            ]
+        )
 
-        match self:
-
-            case Preset.GRIFFIN_PAPER_7B:
-                return dict(width=4096, mlp_expanded_width=3 * 4096, num_heads=32, lru_width=5632,
-                            block_types=tuple(itertools.islice(griffin_pattern, 32)),
-                            embeddings_scale_by_sqrt_dim=False, attention_window_size=1024, logits_soft_cap=0.0,
-                            scan_type=ScanType.AUTO, )
-
-            case Preset.HAWK_PAPER_7B:
-                return dict(width=4096, mlp_expanded_width=3 * 4096, num_heads=32, lru_width=5632,
-                            block_types=(TemporalBlockType.RECURRENT,) * 32, embeddings_scale_by_sqrt_dim=False,
-                            attention_window_size=1024, logits_soft_cap=0.0, scan_type=ScanType.AUTO, )
-
-            case Preset.RECURRENT_GEMMA_2B_V1:
-                return dict(width=2560, mlp_expanded_width=3 * 2560, num_heads=10, lru_width=2560,
-                            block_types=tuple(itertools.islice(griffin_pattern, 26)), embeddings_scale_by_sqrt_dim=True,
-                            attention_window_size=2048, logits_soft_cap=30.0, scan_type=ScanType.AUTO, )
-
-            case Preset.RECURRENT_GEMMA_9B_V1:
-                return dict(width=4096, mlp_expanded_width=3 * 4096, num_heads=16, lru_width=4096,
-                            block_types=tuple(itertools.islice(griffin_pattern, 38)), embeddings_scale_by_sqrt_dim=True,
-                            attention_window_size=2048, logits_soft_cap=30.0, scan_type=ScanType.AUTO, )
+        if self == Preset.GRIFFIN_PAPER_7B:
+            return dict(
+                width=4096,
+                mlp_expanded_width=3 * 4096,
+                num_heads=32,
+                lru_width=5632,
+                block_types=tuple(itertools.islice(griffin_pattern, 32)),
+                embeddings_scale_by_sqrt_dim=False,
+                attention_window_size=1024,
+                logits_soft_cap=0.0,
+                scan_type=ScanType.AUTO,
+            )
+        elif self == Preset.HAWK_PAPER_7B:
+            return dict(
+                width=4096,
+                mlp_expanded_width=3 * 4096,
+                num_heads=32,
+                lru_width=5632,
+                block_types=(TemporalBlockType.RECURRENT,) * 32,
+                embeddings_scale_by_sqrt_dim=False,
+                attention_window_size=1024,
+                logits_soft_cap=0.0,
+                scan_type=ScanType.AUTO,
+            )
+        elif self == Preset.RECURRENT_GEMMA_2B_V1:
+            return dict(
+                width=2560,
+                mlp_expanded_width=3 * 2560,
+                num_heads=10,
+                lru_width=2560,
+                block_types=tuple(itertools.islice(griffin_pattern, 26)),
+                embeddings_scale_by_sqrt_dim=True,
+                attention_window_size=2048,
+                logits_soft_cap=30.0,
+                scan_type=ScanType.AUTO,
+            )
+        elif self == Preset.RECURRENT_GEMMA_9B_V1:
+            return dict(
+                width=4096,
+                mlp_expanded_width=3 * 4096,
+                num_heads=16,
+                lru_width=4096,
+                block_types=tuple(itertools.islice(griffin_pattern, 38)),
+                embeddings_scale_by_sqrt_dim=True,
+                attention_window_size=2048,
+                logits_soft_cap=30.0,
+                scan_type=ScanType.AUTO,
+            )
 
 
 class GriffinConfig(NamedTuple):
@@ -128,8 +159,12 @@ class GriffinConfig(NamedTuple):
         return len(self.block_types)
 
     @classmethod
-    def from_preset(cls, preset: Preset, vocab_size: int = 256_000,
-                    max_sequence_length: int | None = None, ) -> "GriffinConfig":
+    def from_preset(
+        cls,
+        preset: Preset,
+        vocab_size: int = 256_000,
+        max_sequence_length: int | None = None,
+    ) -> "GriffinConfig":
         """Creates a `GriffinConfig` for a given preset."""
         cls_kwargs = preset.config_dict
         if max_sequence_length is not None:
@@ -139,27 +174,38 @@ class GriffinConfig(NamedTuple):
         return cls(vocab_size=vocab_size, **cls_kwargs)
 
     @classmethod
-    def _from_parameter_kwargs(cls, kwargs: dict[str, int | tuple[TemporalBlockType, ...]],
-                               preset: Preset | None = None, embeddings_scale_by_sqrt_dim: bool | None = None,
-                               attention_window_size: int | None = None, logits_soft_cap: float | None = None,
-                               scan_type: ScanType = ScanType.AUTO, max_sequence_length: int | None = None, ):
+    def _from_parameter_kwargs(
+        cls,
+        kwargs: dict[str, int | tuple[TemporalBlockType, ...]],
+        preset: Preset | None = None,
+        embeddings_scale_by_sqrt_dim: bool | None = None,
+        attention_window_size: int | None = None,
+        logits_soft_cap: float | None = None,
+        scan_type: ScanType = ScanType.AUTO,
+        max_sequence_length: int | None = None,
+    ):
         """Creates a `GriffinConfig` from kwargs inferred from parameters."""
         if preset is not None:
             # Verify that the kwargs match the preset
             default_kwargs = preset.config_dict
             for key, value in kwargs.items():
                 if key != "vocab_size" and value != default_kwargs[key]:
-                    raise ValueError("The parameters provided does not seem to match the preset "
-                                     f"{preset} provided, because the value for {key} is {value}, "
-                                     "which is not equal to the preset value of "
-                                     f"{default_kwargs[key]}.")
+                    raise ValueError(
+                        "The parameters provided does not seem to match the preset "
+                        f"{preset} provided, because the value for {key} is {value}, "
+                        "which is not equal to the preset value of "
+                        f"{default_kwargs[key]}."
+                    )
 
         else:
             default_kwargs = {}
 
-        special_kwargs = dict(embeddings_scale_by_sqrt_dim=embeddings_scale_by_sqrt_dim,
-                              attention_window_size=attention_window_size, logits_soft_cap=logits_soft_cap,
-                              scan_type=scan_type, )
+        special_kwargs = dict(
+            embeddings_scale_by_sqrt_dim=embeddings_scale_by_sqrt_dim,
+            attention_window_size=attention_window_size,
+            logits_soft_cap=logits_soft_cap,
+            scan_type=scan_type,
+        )
 
         cls_kwargs = dict(**kwargs)
         for key, value in special_kwargs.items():
@@ -172,11 +218,16 @@ class GriffinConfig(NamedTuple):
         return cls(**cls_kwargs)
 
     @classmethod
-    def from_flax_params_or_variables(cls, flax_params_or_variables: Mapping[str, Any], preset: Preset | None = None,
-                                      embeddings_scale_by_sqrt_dim: bool | None = None,
-                                      attention_window_size: int | None = None, logits_soft_cap: float | None = None,
-                                      scan_type: ScanType = ScanType.AUTO,
-                                      max_sequence_length: int | None = None, ) -> "GriffinConfig":
+    def from_flax_params_or_variables(
+        cls,
+        flax_params_or_variables: Mapping[str, Any],
+        preset: Preset | None = None,
+        embeddings_scale_by_sqrt_dim: bool | None = None,
+        attention_window_size: int | None = None,
+        logits_soft_cap: float | None = None,
+        scan_type: ScanType = ScanType.AUTO,
+        max_sequence_length: int | None = None,
+    ) -> "GriffinConfig":
         """Creates a `GriffinConfig` from Flax parameters.
 
         Args:
@@ -241,22 +292,41 @@ class GriffinConfig(NamedTuple):
                 num_heads = width // heads_dim
 
             else:
-                raise ValueError(f"Can't recognize the type of blocks.{i} with keys"
-                                 f"{block_params.keys()}.")
+                raise ValueError(
+                    f"Can't recognize the type of blocks.{i} with keys"
+                    f"{block_params.keys()}."
+                )
 
             i += 1
 
         return cls._from_parameter_kwargs(
-            kwargs=dict(vocab_size=vocab_size, width=width, mlp_expanded_width=mlp_exp_width, num_heads=num_heads,
-                        lru_width=lru_width, block_types=tuple(block_types), ), preset=preset,
-            embeddings_scale_by_sqrt_dim=embeddings_scale_by_sqrt_dim, attention_window_size=attention_window_size,
-            logits_soft_cap=logits_soft_cap, scan_type=scan_type, max_sequence_length=max_sequence_length, )
+            kwargs=dict(
+                vocab_size=vocab_size,
+                width=width,
+                mlp_expanded_width=mlp_exp_width,
+                num_heads=num_heads,
+                lru_width=lru_width,
+                block_types=tuple(block_types),
+            ),
+            preset=preset,
+            embeddings_scale_by_sqrt_dim=embeddings_scale_by_sqrt_dim,
+            attention_window_size=attention_window_size,
+            logits_soft_cap=logits_soft_cap,
+            scan_type=scan_type,
+            max_sequence_length=max_sequence_length,
+        )
 
     @classmethod
-    def from_torch_params(cls, params: dict[str, Any], preset: Preset | None = None,
-                          embeddings_scale_by_sqrt_dim: bool | None = None, attention_window_size: int | None = None,
-                          logits_soft_cap: float | None = None, scan_type: ScanType | None = None,
-                          max_sequence_length: int | None = None, ) -> "GriffinConfig":
+    def from_torch_params(
+        cls,
+        params: dict[str, Any],
+        preset: Preset | None = None,
+        embeddings_scale_by_sqrt_dim: bool | None = None,
+        attention_window_size: int | None = None,
+        logits_soft_cap: float | None = None,
+        scan_type: ScanType | None = None,
+        max_sequence_length: int | None = None,
+    ) -> "GriffinConfig":
         """Creates a `GriffinConfig` from Pytorch parameters.
 
         Args:
@@ -319,10 +389,21 @@ class GriffinConfig(NamedTuple):
             i += 1
 
         return cls._from_parameter_kwargs(
-            kwargs=dict(vocab_size=vocab_size, width=width, mlp_expanded_width=mlp_exp_width, num_heads=num_heads,
-                        lru_width=lru_width, block_types=tuple(block_types), ), preset=preset,
-            embeddings_scale_by_sqrt_dim=embeddings_scale_by_sqrt_dim, attention_window_size=attention_window_size,
-            logits_soft_cap=logits_soft_cap, scan_type=scan_type, max_sequence_length=max_sequence_length, )
+            kwargs=dict(
+                vocab_size=vocab_size,
+                width=width,
+                mlp_expanded_width=mlp_exp_width,
+                num_heads=num_heads,
+                lru_width=lru_width,
+                block_types=tuple(block_types),
+            ),
+            preset=preset,
+            embeddings_scale_by_sqrt_dim=embeddings_scale_by_sqrt_dim,
+            attention_window_size=attention_window_size,
+            logits_soft_cap=logits_soft_cap,
+            scan_type=scan_type,
+            max_sequence_length=max_sequence_length,
+        )
 
 
 def apply_it_formatter(input_string: str) -> str:

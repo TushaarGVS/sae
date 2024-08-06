@@ -13,8 +13,8 @@ packages = [
 
 [tool.poetry.dependencies]
 python = "^3.11"
-torch = "^2.3.1"
-triton = "^2.3.1"
+torch = "^2.4.0"
+triton = { git = "https://github.com/triton-lang/triton.git", subdirectory = "python" }
 numpy = "^1.26.4"
 blobfile = "^2.1.1"
 wandb = "^0.17.5"
