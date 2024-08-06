@@ -1,0 +1,103 @@
+# Adapted from: https://colab.research.google.com/drive/15S4ISFVMQtfc0FPi29HRaX03dWxL65zx.
+#
+# python scripts/train_tms_model.py                     \
+# --d_model 2                                           \
+# --n_features 5                                        \
+# --feature_proba 0.9                                   \
+# --batch_size 1024                                     \
+# --steps 10_000                                        \
+# --lr 1e-3                                             \
+# --model_save_path "artefacts/toy_model-spars=0.9.pt"  \
+# --log_freq 100
+
+from argparse import ArgumentParser
+
+import torch
+
+from sparse_autoencoder.tms.train import train_tms
+
+
+def main(
+    d_model: int,
+    n_features: int,
+    feature_proba: float,
+    batch_size: int,
+    steps: int,
+    lr: float,
+    model_save_path: str | None = None,
+    log_freq: int = 100,
+):
+    model = train_tms(
+        d_model=d_model,
+        n_features=n_features,
+        feature_probs=feature_proba,
+        batch_size=batch_size,
+        steps=steps,
+        lr=lr,
+        lr_scale=None,
+        log_freq=log_freq,
+        device=torch.device("cuda"),
+        model_save_path=model_save_path,
+    )
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser(description="Train a toy model of superposition.")
+    parser.add_argument(
+        "--d_model",
+        type=int,
+        help="Model hidden dimension.",
+        default=2,
+    )
+    parser.add_argument(
+        "--n_features",
+        type=int,
+        help="Number of data features (set up to exp(d_model) features).",
+        default=5,
+    )
+    parser.add_argument(
+        "--feature_proba",
+        type=float,
+        help="Feature probability (1 - sparsity).",
+        default=0.99,
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        help="Training batch size.",
+        default=1024,
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        help="Number of training steps.",
+        default=10_000,
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        help="Learning rate.",
+        default=1e-3,
+    )
+    parser.add_argument(
+        "--log_freq",
+        type=int,
+        help="Logging frequency.",
+        default=100,
+    )
+    parser.add_argument(
+        "--model_save_path", type=str, help="Path to save the toy model."
+    )
+    args = parser.parse_args()
+
+    # 10,000 steps: loss=0.0581, lr=6.12e-20.
+    main(
+        d_model=args.d_model,
+        n_features=args.n_features,
+        feature_proba=args.feature_proba,
+        batch_size=args.batch_size,
+        steps=args.steps,
+        lr=args.lr,
+        log_freq=args.log_freq,
+        model_save_path=args.model_save_path,
+    )
