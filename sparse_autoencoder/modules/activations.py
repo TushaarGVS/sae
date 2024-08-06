@@ -6,6 +6,8 @@ import triton.language as tl
 from torch import autograd
 from torch.amp import custom_fwd, custom_bwd
 
+from sparse_autoencoder.modules.utils import contiguous
+
 
 @triton.jit
 def _relu(x: tl.tensor) -> tl.tensor:
@@ -69,6 +71,7 @@ class ReLU(autograd.Function):
     """Computes relu(x)."""
 
     @staticmethod
+    @contiguous
     @custom_fwd(device_type="cuda")
     def forward(ctx: Any, x: torch.Tensor) -> torch.Tensor:
         ctx.save_for_backward(x)
@@ -90,6 +93,7 @@ class ReLU(autograd.Function):
         return y
 
     @staticmethod
+    @contiguous
     @custom_bwd(device_type="cuda")
     def backward(ctx: Any, dy: torch.Tensor) -> torch.Tensor:
         (x,) = ctx.saved_tensors
@@ -216,6 +220,7 @@ class JumpReLU(autograd.Function):
     """Computes jumprelu(x, log_threshold): https://arxiv.org/pdf/2407.14435."""
 
     @staticmethod
+    @contiguous
     @custom_fwd(device_type="cuda")
     def forward(ctx: Any, x: torch.Tensor, log_threshold: torch.Tensor) -> torch.Tensor:
         x_numel, dim_m = x.numel(), x.shape[-1]
@@ -241,6 +246,7 @@ class JumpReLU(autograd.Function):
         return y
 
     @staticmethod
+    @contiguous
     @custom_bwd(device_type="cuda")
     def backward(ctx: Any, dy: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x, log_threshold = ctx.saved_tensors
@@ -303,6 +309,7 @@ class TopK(autograd.Function):
     """Computes relu(topk(x, k)): https://github.com/openai/sparse_autoencoder."""
 
     @staticmethod
+    @contiguous
     @custom_fwd(device_type="cuda")
     def forward(ctx: Any, x: torch.Tensor, k: int, dim: int = -1) -> Any:
         assert k <= x.size(dim)
@@ -311,6 +318,7 @@ class TopK(autograd.Function):
         return y
 
     @staticmethod
+    @contiguous
     @custom_bwd(device_type="cuda")
     def backward(ctx: Any, dy: torch.Tensor) -> Tuple[torch.Tensor, None, None]:
         (y,) = ctx.saved_tensors
@@ -343,6 +351,7 @@ class BatchTopK(autograd.Function):
     """
 
     @staticmethod
+    @contiguous
     @custom_fwd(device_type="cuda")
     def forward(ctx: Any, x: torch.Tensor, k: int, dim: int = -1) -> torch.Tensor:
         assert k <= x.size(dim)
@@ -358,6 +367,7 @@ class BatchTopK(autograd.Function):
         return y
 
     @staticmethod
+    @contiguous
     @custom_bwd(device_type="cuda")
     def backward(ctx: Any, dy: torch.Tensor) -> Tuple[torch.Tensor, None, None]:
         (y,) = ctx.saved_tensors
@@ -425,6 +435,7 @@ class ProLU(autograd.Function):
     """
 
     @staticmethod
+    @contiguous
     @custom_fwd(device_type="cuda")
     def forward(ctx: Any, x: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
         x_numel, dim_m = x.numel(), x.shape[-1]
@@ -449,6 +460,7 @@ class ProLU(autograd.Function):
         return y
 
     @staticmethod
+    @contiguous
     @custom_bwd(device_type="cuda")
     def backward(ctx: Any, dy: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         (y,) = ctx.saved_tensors
