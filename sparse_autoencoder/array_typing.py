@@ -22,6 +22,8 @@ Notation:
 # Toy models of superposition.
 TmsFeatures = jt.Float[torch.Tensor, "*b f"]
 TmsWeights = jt.Float[torch.Tensor, "d f"]
+TmsWeightsTr = jt.Float[torch.Tensor, "f d"]
+TmsBias = jt.Float[torch.Tensor, "f"]
 TmsActivations = jt.Float[torch.Tensor, "*b d"]
 
 # RecurrentGemma (RG-LRU expansion = model dimension).

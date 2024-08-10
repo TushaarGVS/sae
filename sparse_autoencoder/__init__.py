@@ -3,6 +3,6 @@
 
 __version__ = "0.1.0"
 
-from sparse_autoencoder import model
+from sparse_autoencoder import sae
 
-AutoEncoder = model.AutoEncoder
+AutoEncoder = sae.AutoEncoder

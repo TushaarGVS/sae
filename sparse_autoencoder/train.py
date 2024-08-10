@@ -717,12 +717,34 @@ class Config:
     wandb_name: str | None = None
 
 
+@dataclass
+class Config2:
+    n_op_shards: int = 1
+    n_replicas: int = 8
+
+    n_dirs: int = 5
+    bs: int = 1024
+    d_model: int = 2
+    k: int = 2
+    auxk: int = 3
+
+    lr: float = 1e-3
+    eps: float = 6.25e-10
+    clip_grad: float | None = None
+    auxk_coef: float = 1 / 32
+    dead_toks_threshold: int = 50_000
+    ema_multiplier: float | None = None
+
+    wandb_project: str | None = None
+    wandb_name: str | None = None
+
+
 def main():
-    cfg = Config()
+    cfg = Config2()
     comms = make_torch_comms(n_op_shards=cfg.n_op_shards, n_replicas=cfg.n_replicas)
 
     ## dataloading is left as an exercise for the reader
-    acts_iter = ...
+    # acts_iter = ...
     stats_acts_sample = ...
 
     n_dirs_local = cfg.n_dirs // cfg.n_op_shards

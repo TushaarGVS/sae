@@ -101,6 +101,11 @@ class ReLU(autograd.Function):
         x_numel, dim_m = x.numel(), x.shape[-1]
         BLOCK_M = triton.next_power_of_2(dim_m)
 
+        # Calling `stride()` in strict mode torch compilation is illegal:
+        # https://github.com/pytorch/pytorch/issues/115344#issuecomment-1846229103.
+        stride_dy_m = 1
+        stride_dx_m = 1
+
         dx = torch.empty_like(x)
         grid = lambda META: (triton.cdiv(x_numel, META["BLOCK_M"]),)
         _relu_bwd_kernel[grid](
@@ -108,8 +113,8 @@ class ReLU(autograd.Function):
             dy_ptr=dy,
             dx_ptr=dx,
             stride_x_m=x.stride(-1),
-            stride_dy_m=dy.stride(-1),
-            stride_dx_m=dx.stride(-1),
+            stride_dy_m=stride_dy_m,
+            stride_dx_m=stride_dx_m,
             x_numel=x_numel,
             BLOCK_M=BLOCK_M,
         )
@@ -484,11 +489,3 @@ class ProLU(autograd.Function):
 
 
 prolu = ProLU.apply
-
-ACTIVATION_FUNCTIONS = {
-    "relu": relu,
-    "jumprelu": jumprelu,
-    "topk": topk,
-    "batchtopk": batchtopk,
-    "prolu": prolu,
-}

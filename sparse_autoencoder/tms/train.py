@@ -6,7 +6,7 @@ from torch.optim import AdamW
 from tqdm import trange
 
 import sparse_autoencoder.array_typing as at
-from sparse_autoencoder.tms.toy_model import ToyModel
+from sparse_autoencoder.tms.toy_model import FastToyModel, ToyModel
 
 
 def generate_feature_batch(
@@ -44,14 +44,19 @@ def train_tms(
     device: torch.device = torch.device("cuda"),
     log_freq: int = 100,
     model_save_path: str | None = None,
-) -> ToyModel:
+    use_fast_model: bool = False,
+) -> FastToyModel | ToyModel:
     if lr_scale is None:
         # Default: cosine lr scale.
         lr_scale = lambda step_steps: np.cos(
             0.5 * np.pi * step_steps[0] / (step_steps[1] - 1)
         )
 
-    model = ToyModel(n_features=n_features, d_model=d_model, device=device)
+    if use_fast_model:
+        model = FastToyModel(n_features=n_features, d_model=d_model)
+    else:
+        model = ToyModel(n_features=n_features, d_model=d_model)
+    model.cuda()
     optim = AdamW(model.parameters(), lr=lr)
 
     pbar = trange(steps, desc="tms training")
