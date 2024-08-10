@@ -8,9 +8,12 @@ import triton
 import triton.language as tl
 from jaxtyping import Float
 from torch import autograd
-from torch.amp import custom_fwd
+from torch.amp import custom_fwd, custom_bwd
 
 from sparse_autoencoder.modules.utils import contiguous
+
+# Performance enhancement, but slight loss in precision.
+torch.set_float32_matmul_precision("high")
 
 
 @triton.jit
@@ -176,8 +179,8 @@ class CooSparseDenseMatmul(autograd.Function):
         assert x.shape[1] == dense.shape[0]
 
         x_coo = x.to_sparse_coo()
-        coo_idxs: Float[torch.Tensor, "2 K"] = x_coo._indices()
-        coo_vals: Float[torch.Tensor, "K"] = x_coo._values()
+        coo_idxs: Float[torch.Tensor, "2 K"] = x_coo.indices()
+        coo_vals: Float[torch.Tensor, "K"] = x_coo.values()
         ctx.save_for_backward(coo_idxs, coo_vals, dense)
         ctx.dim_n = dense.shape[0]
 
@@ -209,7 +212,7 @@ class CooSparseDenseMatmul(autograd.Function):
 
     @staticmethod
     @contiguous
-    @custom_fwd(device_type="cuda")
+    @custom_bwd(device_type="cuda")
     def backward(
         ctx, dy: Float[torch.Tensor, "A B"]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -321,7 +324,7 @@ class SparseDenseMatmul(autograd.Function):
 
     @staticmethod
     @contiguous
-    @custom_fwd(device_type="cuda")
+    @custom_bwd(device_type="cuda")
     def backward(ctx, dy: torch.Tensor) -> Any:
         pass
 

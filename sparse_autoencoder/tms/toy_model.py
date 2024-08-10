@@ -31,11 +31,11 @@ class ToyModel(nn.Module):
         return relu(recons + self.bias)
 
 
-@torch.compile(fullgraph=True, backend="eager")
-def _toy_model_fwd_kernel(
-    x: at.TmsFeatures, W_tr: at.TmsWeightsTr, bias: at.TmsBias
+@torch.compile(fullgraph=True, backend="inductor")
+def _linear_relu_fwd_kernel(
+    activations: at.TmsActivations, W_tr: at.TmsWeightsTr, bias: at.TmsBias
 ) -> at.TmsFeatures:
-    return relu(F.linear(coo_sparse_dense_matmul(x, W_tr), W_tr, bias))
+    return relu(F.linear(activations, W_tr, bias))
 
 
 class FastToyModel(nn.Module):
@@ -59,4 +59,7 @@ class FastToyModel(nn.Module):
         self.load_state_dict(state_dict)
 
     def forward(self, x: at.TmsFeatures) -> at.TmsFeatures:
-        return _toy_model_fwd_kernel(x, self.W_tr, self.bias)
+        # Note: `coo_sparse_dense_matmul` cannot be fused using `torch.compile`: sparse
+        # coo format results in errors in compilation with backend="inductor".
+        activations = coo_sparse_dense_matmul(x, self.W_tr)
+        return _linear_relu_fwd_kernel(activations, self.W_tr, self.bias)

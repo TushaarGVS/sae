@@ -3,18 +3,20 @@
 # python scripts/train_tms_model.py                     \
 # --d_model 2                                           \
 # --n_features 5                                        \
-# --feature_proba 0.9                                   \
+# --feature_proba 0.01                                  \
 # --batch_size 1024                                     \
 # --steps 10_000                                        \
 # --lr 1e-3                                             \
-# --model_save_path "artefacts/toy_model-spars=0.9"     \
+# --model_save_path "artefacts/toy_model-spars=0.99"    \
 # --log_freq 100                                        \
 # --fast
 
 from argparse import ArgumentParser
 
 import torch
+from einops import einsum
 
+from sparse_autoencoder.tms.train import generate_feature_batch
 from sparse_autoencoder.tms.train import train_tms
 from sparse_autoencoder.tms.utils import plot_features_in_2d
 
@@ -44,8 +46,13 @@ def main(
         use_fast_model=use_fast_model,
     )
     if d_model == 2:
+        samples = generate_feature_batch(
+            batch_size=250, n_features=n_features, feature_probs=feature_proba
+        )
+        samples_hidden = einsum(samples, model.W_tr, "b f, f d -> b d")
         plot_features_in_2d(
-            model.W_tr.transpose(0, 1),
+            W=model.W_tr.transpose(0, 1),
+            samples_hidden=samples_hidden,
             title=(
                 f"{n_features} features in {d_model}D space\n"
                 f"(spars={round(1 - feature_proba, 2)})"
@@ -104,7 +111,7 @@ if __name__ == "__main__":
     parser.add_argument("--fast", action="store_true", help="Train using fast model.")
     args = parser.parse_args()
 
-    # 10,000 steps: loss=0.059, lr=6.12e-20.
+    # 10,000 steps: loss=0.000104, lr=6.12e-20.
     main(
         d_model=args.d_model,
         n_features=args.n_features,
