@@ -18,6 +18,7 @@ def plot_features_in_2d(
         (line,) = ax.plot([0, feat_x], [0, feat_y], color="black", lw=1.5)
 
     if samples_hidden is not None:
+        samples_hidden = samples_hidden.tolist()
         for sample_hidden in samples_hidden:
             (marker,) = ax.plot(
                 [sample_hidden[0]],
@@ -31,6 +32,6 @@ def plot_features_in_2d(
     if title is not None:
         plt.title(title, fontsize=10)
     if save_path is not None:
-        plt.savefig(save_path)
+        plt.savefig(save_path, bbox_inches="tight")
 
     plt.show()
