@@ -11,12 +11,14 @@ from sparse_autoencoder.modules.utils import contiguous
 
 @triton.jit
 def _relu(x: tl.tensor) -> tl.tensor:
-    return tl.where(x > 0.0, x, 0.0)
+    _zero = 0.0
+    return tl.where(x > 0.0, x, _zero.to(x.dtype))
 
 
 @triton.jit
 def _relu_grad(x: tl.tensor) -> tl.tensor:
-    return tl.where(x > 0.0, 1.0, 0.0)
+    _zero, _one = 0.0, 1.0
+    return tl.where(x > 0.0, _one.to(x.dtype), _zero.to(x.dtype))
 
 
 @triton.jit
@@ -131,7 +133,8 @@ def rectangle(x):
 
 @triton.jit
 def _jumprelu(x: tl.tensor, threshold: tl.tensor) -> tl.tensor:
-    return x * tl.where(x > threshold, 1.0, 0.0)
+    _zero, _one = 0.0, 1.0
+    return x * tl.where(x > threshold, _one.to(x.dtype), _zero.to(x.dtype))
 
 
 @triton.jit
@@ -166,10 +169,10 @@ def _jumprelu_fwd_kernel(
     # Thresholds are one per `dim_m`, hence, circular access is needed.
     log_threshold_offsets_m = (offsets_m * stride_log_threshold_m) % dim_m
     log_threshold_ptrs = log_threshold_ptr + log_threshold_offsets_m
-    log_threshold = tl.load(log_threshold_ptrs, mask=mask)
     # Triton `tl.exp()` doesn't work for `float16` or `bfloat16`, see:
     # https://github.com/triton-lang/triton/issues/1516.
-    threshold = tl.exp(log_threshold.to(tl.float32))
+    log_threshold = tl.load(log_threshold_ptrs, mask=mask).to(tl.float32)
+    threshold = tl.exp(log_threshold)
 
     y_ptrs = y_ptr + offsets_m * stride_y_m
     y = _jumprelu(x=x, threshold=threshold)
@@ -204,8 +207,8 @@ def _jumprelu_bwd_kernel(
 
     log_threshold_offsets_m = (offsets_m * stride_log_threshold_m) % dim_m
     log_threshold_ptrs = log_threshold_ptr + log_threshold_offsets_m
-    log_threshold = tl.load(log_threshold_ptrs, mask=mask)
-    threshold = tl.exp(log_threshold.to(tl.float32))
+    log_threshold = tl.load(log_threshold_ptrs, mask=mask).to(tl.float32)
+    threshold = tl.exp(log_threshold)
 
     dx_ptrs = dx_ptr + offsets_m * stride_dx_m
     dlog_threshold_offsets_m = (offsets_m * stride_dlog_threshold_m) % dim_m
@@ -402,7 +405,8 @@ batchtopk = BatchTopK.apply
 
 @triton.jit
 def _prolu(x: tl.tensor, bias: tl.tensor) -> tl.tensor:
-    return tl.where(((x + bias) > 0) & (x > 0), x, 0.0)
+    _zero = 0.0
+    return tl.where(((x + bias) > 0) & (x > 0), x, _zero.to(x.dtype))
 
 
 @triton.jit

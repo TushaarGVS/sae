@@ -5,4 +5,4 @@ __version__ = "0.1.0"
 
 from sparse_autoencoder import sae
 
-AutoEncoder = sae.AutoEncoder
+FastAutoEncoder = sae.FastAutoEncoder

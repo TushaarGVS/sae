@@ -3,5 +3,5 @@
 from torch import nn
 
 
-class AutoEncoder(nn.Module):
+class FastAutoEncoder(nn.Module):
     pass

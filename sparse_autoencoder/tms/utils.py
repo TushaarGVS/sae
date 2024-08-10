@@ -32,6 +32,6 @@ def plot_features_in_2d(
     if title is not None:
         plt.title(title, fontsize=10)
     if save_path is not None:
-        plt.savefig(save_path, bbox_inches="tight")
+        plt.savefig(save_path, bbox_inches="tight", dpi=150)
 
     plt.show()

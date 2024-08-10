@@ -12,12 +12,17 @@ def typed(function: F) -> F:
 
 """
 Notation:
+- nnz = number of non-zero elements
 - b = batch size
 - l = sequence length
 - d = model dimension
 - f = number of feature directions
 - e = expanded autoencoder dimension
 """
+
+# General (e.g., coo sparse tensors, etc.).
+CooIndices = jt.Float[torch.Tensor, "2 nnz"]
+CooValues = jt.Float[torch.Tensor, "nnz"]
 
 # Toy models of superposition.
 TmsFeatures = jt.Float[torch.Tensor, "*b f"]

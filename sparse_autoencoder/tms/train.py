@@ -6,6 +6,7 @@ from torch.optim import AdamW
 from tqdm import trange
 
 import sparse_autoencoder.array_typing as at
+from sparse_autoencoder.modules.loss import mse_loss
 from sparse_autoencoder.tms.toy_model import FastToyModel, ToyModel
 
 
@@ -29,8 +30,10 @@ def generate_feature_batch(
     return batch
 
 
-def mse_loss(feature_batch: at.TmsFeatures, recons: at.TmsFeatures) -> torch.Tensor:
-    return ((feature_batch - recons) ** 2).mean()
+def torch_mse_loss(
+    feature_batch: at.TmsFeatures, recons: at.TmsFeatures
+) -> torch.Tensor:
+    return ((recons - feature_batch) ** 2).mean()
 
 
 def train_tms(
@@ -73,7 +76,7 @@ def train_tms(
             device=device,
         )
         recons = model(feature_batch)
-        loss = mse_loss(feature_batch=feature_batch, recons=recons)
+        loss = mse_loss(recons, feature_batch)
         loss.backward()
         loss = loss.item()  # drop buffers
         optim.step()

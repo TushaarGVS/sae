@@ -47,7 +47,7 @@ def main(
     )
     if d_model == 2:
         samples = generate_feature_batch(
-            batch_size=250, n_features=n_features, feature_probs=feature_proba
+            batch_size=300, n_features=n_features, feature_probs=feature_proba
         )
         samples_hidden = einsum(samples, model.W_tr, "b f, f d -> b d")
         plot_features_in_2d(
@@ -111,7 +111,7 @@ if __name__ == "__main__":
     parser.add_argument("--fast", action="store_true", help="Train using fast model.")
     args = parser.parse_args()
 
-    # 10,000 steps: loss=0.000104, lr=6.12e-20.
+    # 10,000 steps: loss=0.000184, lr=6.12e-20.
     main(
         d_model=args.d_model,
         n_features=args.n_features,

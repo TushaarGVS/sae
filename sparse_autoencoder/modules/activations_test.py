@@ -13,6 +13,8 @@ from sparse_autoencoder.modules.activations import (
 )
 from sparse_autoencoder.modules.test_utils import get_fl_tensor
 
+_factory_kwargs = {"dtype": torch.float16}
+
 
 def _test_activation(
     x: torch.Tensor,
@@ -33,24 +35,25 @@ def _test_activation(
     max_abs_err_dy = torch.max(torch.abs(dy - dy_ref)).item()
 
     print(f"x_numel={x.numel()}, {x.dtype=}, {x.shape=}")
+    print(f"{y.dtype=}, {y.shape=}")
     print(f"[{activation_fn_name}] {max_abs_err_y=} {max_abs_err_dy=}\n--")
 
 
 def test_relu() -> None:
-    x = get_fl_tensor(torch.Size([64, 32, 4096]))
+    x = get_fl_tensor(torch.Size([64, 32, 4096]), factory_kwargs=_factory_kwargs)
     y_ref = F.relu(x)
     _test_activation(x, relu, y_ref, "relu")
 
 
 def test_jumprelu() -> None:
-    x = get_fl_tensor(torch.Size([64, 32, 4096]))
+    x = get_fl_tensor(torch.Size([64, 32, 4096]), factory_kwargs=_factory_kwargs)
     log_threshold = get_fl_tensor(torch.Size([4096]))
     y_ref = x * torch.where(x > torch.exp(log_threshold), 1.0, 0.0)
     _test_activation(x, jumprelu, y_ref, "jumprelu", log_threshold)
 
 
 def test_topk() -> None:
-    x = get_fl_tensor(torch.Size([64, 32, 4096]))
+    x = get_fl_tensor(torch.Size([64, 32, 4096]), factory_kwargs=_factory_kwargs)
     k = 500
     dim = -1
     topk_ref = x.topk(k=k, dim=dim)
@@ -60,7 +63,7 @@ def test_topk() -> None:
 
 
 def test_batchtopk() -> None:
-    x = get_fl_tensor(torch.Size([16, 32, 4096]))
+    x = get_fl_tensor(torch.Size([16, 32, 4096]), factory_kwargs=_factory_kwargs)
     k = 500  # note: torch.topk runs out of memory for large k (= k * batch)
     dim = -1
     topk_ref = x.reshape(x.shape[1], -1).topk(k=(k * x.shape[0]), dim=dim)
@@ -71,7 +74,7 @@ def test_batchtopk() -> None:
 
 
 def test_prolu() -> None:
-    x = get_fl_tensor(torch.Size([64, 32, 4096 * 16]))
+    x = get_fl_tensor(torch.Size([64, 32, 4096 * 16]), factory_kwargs=_factory_kwargs)
     bias = get_fl_tensor(torch.Size([4096 * 16]))
     y_ref = torch.where(((x + bias) > 0) & (x > 0), x, 0.0)
     _test_activation(x, prolu, y_ref, "prolu", bias)

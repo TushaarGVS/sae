@@ -172,7 +172,7 @@ class CooSparseDenseMatmul(autograd.Function):
     @contiguous
     @custom_fwd(device_type="cuda")
     def forward(
-        ctx,
+        ctx: Any,
         x: Float[torch.Tensor, "A N"],
         dense: Float[torch.Tensor, "N B"],
     ) -> Float[torch.Tensor, "A B"]:
@@ -214,7 +214,7 @@ class CooSparseDenseMatmul(autograd.Function):
     @contiguous
     @custom_bwd(device_type="cuda")
     def backward(
-        ctx, dy: Float[torch.Tensor, "A B"]
+        ctx: Any, dy: Float[torch.Tensor, "A B"]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         d(XW)/dW: [N B] = X.T: [N A] @ dy [A B]
@@ -295,7 +295,7 @@ class SparseDenseMatmul(autograd.Function):
     @contiguous
     @custom_fwd(device_type="cuda")
     def forward(
-        ctx,
+        ctx: Any,
         sparse_idxs: Float[torch.Tensor, "A K"],
         sparse_vals: Float[torch.Tensor, "A K"],
         dense: Float[torch.Tensor, "N B"],
@@ -325,7 +325,7 @@ class SparseDenseMatmul(autograd.Function):
     @staticmethod
     @contiguous
     @custom_bwd(device_type="cuda")
-    def backward(ctx, dy: torch.Tensor) -> Any:
+    def backward(ctx: Any, dy: torch.Tensor) -> Any:
         pass
 
 
