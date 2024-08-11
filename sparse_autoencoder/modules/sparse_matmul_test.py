@@ -33,8 +33,8 @@ def _test_matmul(
     print(f"dense_numel={dense.numel()}, {dense.dtype=}, {dense.shape=}")
     print(
         f"[{matmul_fn_name}] "
-        f"{max_abs_err_y=} "
-        f"{max_abs_err_dydw=} "
+        f"{max_abs_err_y=}, "
+        f"{max_abs_err_dydw=}, "
         f"{max_abs_err_dydx=}\n"
         f"--"
     )

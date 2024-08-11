@@ -30,7 +30,7 @@ def _test_loss(
     print(f"output_numel={output.numel()}, {output.dtype=}, {output.shape=}")
     print(f"{loss.dtype=}, {loss.shape=}")
     print(f"{dloss.dtype=}, {dloss.shape=}")
-    print(f"[{loss_fn_name}] {max_abs_err_loss=} {max_abs_err_dloss=}\n--")
+    print(f"[{loss_fn_name}] {max_abs_err_loss=}, {max_abs_err_dloss=}\n--")
 
 
 def test_mse_loss() -> None:

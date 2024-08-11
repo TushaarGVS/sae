@@ -16,8 +16,7 @@ from argparse import ArgumentParser
 import torch
 from einops import einsum
 
-from sparse_autoencoder.tms.train import generate_feature_batch
-from sparse_autoencoder.tms.train import train_tms
+from sparse_autoencoder.tms.train_toy_model import generate_feature_batch, train_tms
 from sparse_autoencoder.tms.utils import plot_features_in_2d
 
 

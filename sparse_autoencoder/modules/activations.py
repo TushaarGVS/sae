@@ -3,6 +3,8 @@ from typing import Tuple, Any
 import torch
 import triton
 import triton.language as tl
+from einops import rearrange
+from jaxtyping import Float
 from torch import autograd
 from torch.amp import custom_fwd, custom_bwd
 
@@ -24,10 +26,13 @@ def _relu_grad(x: tl.tensor) -> tl.tensor:
 @triton.jit
 def _relu_fwd_kernel(
     x_ptr,
+    bias_ptr,
     y_ptr,
     stride_x_m: int,
+    stride_bias_m: int,
     stride_y_m: int,
     x_numel: int,
+    dim_m: int,
     BLOCK_M: tl.constexpr,
 ) -> None:
     # Grid: (x_numel/dim_m,) blocks, with `dim_m` elements per block.
@@ -38,6 +43,11 @@ def _relu_fwd_kernel(
 
     x_ptrs = x_ptr + offsets_m * stride_x_m
     x = tl.load(x_ptrs, mask=mask)
+    if bias_ptr:
+        bias_offsets_m = (offsets_m * stride_bias_m) % dim_m
+        bias_ptrs = bias_ptr + bias_offsets_m
+        bias = tl.load(bias_ptrs, mask=mask)
+        x = x + bias
 
     y_ptrs = y_ptr + offsets_m * stride_y_m
     y = _relu(x)
@@ -46,39 +56,42 @@ def _relu_fwd_kernel(
 
 @triton.jit
 def _relu_bwd_kernel(
-    x_ptr,
+    y_ptr,
     dy_ptr,
     dx_ptr,
-    stride_x_m: int,
+    stride_y_m: int,
     stride_dy_m: int,
     stride_dx_m: int,
-    x_numel: int,
+    y_numel: int,
     BLOCK_M: tl.constexpr,
 ) -> None:
     pid_m = tl.program_id(0)
     offsets_m = BLOCK_M * pid_m + tl.arange(0, BLOCK_M)
-    mask = offsets_m < x_numel
+    mask = offsets_m < y_numel
 
-    x_ptrs = x_ptr + offsets_m * stride_x_m
+    y_ptrs = y_ptr + offsets_m * stride_y_m
     dy_ptrs = dy_ptr + offsets_m * stride_dy_m
     dx_ptrs = dx_ptr + offsets_m * stride_dx_m
 
-    x = tl.load(x_ptrs, mask=mask)
+    y = tl.load(y_ptrs, mask=mask)
     dy = tl.load(dy_ptrs, mask=mask)
-    dx = _relu_grad(x) * dy
+    dx = _relu_grad(y) * dy
     tl.store(dx_ptrs, dx.to(dx_ptr.dtype.element_ty), mask=mask)
 
 
 class ReLU(autograd.Function):
-    """Computes relu(x)."""
+    """Computes relu(x + bias)."""
 
     @staticmethod
     @contiguous
     @custom_fwd(device_type="cuda")
-    def forward(ctx: Any, x: torch.Tensor) -> torch.Tensor:
-        ctx.save_for_backward(x)
-
+    def forward(
+        ctx: Any,
+        x: Float[torch.Tensor, "*b m"],
+        bias: Float[torch.Tensor, "m"] | None = None,
+    ) -> Float[torch.Tensor, "*b m"]:
         x_numel, dim_m = x.numel(), x.shape[-1]
+        assert bias is None or dim_m == bias.shape[-1]
         BLOCK_M = triton.next_power_of_2(dim_m)
 
         y = torch.empty_like(x)
@@ -86,41 +99,49 @@ class ReLU(autograd.Function):
         grid = lambda META: (triton.cdiv(x_numel, META["BLOCK_M"]),)
         _relu_fwd_kernel[grid](
             x_ptr=x,
+            bias_ptr=bias,
             y_ptr=y,
             stride_x_m=x.stride(-1),
+            stride_bias_m=(bias.stride(-1) if bias is not None else 0),
             stride_y_m=y.stride(-1),
             x_numel=x_numel,
+            dim_m=dim_m,
             BLOCK_M=BLOCK_M,
         )
+        ctx.save_for_backward(y)
+        ctx.bias = True if bias is not None else False
         return y
 
     @staticmethod
     @contiguous
     @custom_bwd(device_type="cuda")
-    def backward(ctx: Any, dy: torch.Tensor) -> torch.Tensor:
-        (x,) = ctx.saved_tensors
+    def backward(
+        ctx: Any, dy: Float[torch.Tensor, "*b m"]
+    ) -> Tuple[Float[torch.Tensor, "*b m"], Float[torch.Tensor, "m"] | None]:
+        (y,) = ctx.saved_tensors
 
-        x_numel, dim_m = x.numel(), x.shape[-1]
+        y_numel, dim_m = y.numel(), y.shape[-1]
         BLOCK_M = triton.next_power_of_2(dim_m)
 
+        dx: Float[torch.Tensor, "*b m"] = torch.empty_like(y)
         # Calling `stride()` in strict mode torch compilation is illegal:
         # https://github.com/pytorch/pytorch/issues/115344#issuecomment-1846229103.
         stride_dy_m = 1
         stride_dx_m = 1
 
-        dx = torch.empty_like(x)
-        grid = lambda META: (triton.cdiv(x_numel, META["BLOCK_M"]),)
+        grid = lambda META: (triton.cdiv(y_numel, META["BLOCK_M"]),)
         _relu_bwd_kernel[grid](
-            x_ptr=x,
+            y_ptr=y,
             dy_ptr=dy,
             dx_ptr=dx,
-            stride_x_m=x.stride(-1),
+            stride_y_m=y.stride(-1),
             stride_dy_m=stride_dy_m,
             stride_dx_m=stride_dx_m,
-            x_numel=x_numel,
+            y_numel=y_numel,
             BLOCK_M=BLOCK_M,
         )
-        return dx
+        dbias = dx.clone().view(-1, dim_m).sum(dim=0) if ctx.bias else None
+        return dx, dbias
 
 
 relu = ReLU.apply
@@ -290,9 +311,14 @@ jumprelu = JumpReLU.apply
 
 @torch.compile(fullgraph=True, backend="inductor")
 def _topk_fwd_kernel(
-    x: torch.Tensor, k: int, dim: int, BLOCK_M: tl.constexpr | None = None
-) -> torch.Tensor:
-    topk_ = x.topk(k=k, dim=dim)
+    x: torch.Tensor,
+    k: int,
+    bias: torch.Tensor | None = None,
+    BLOCK_M: tl.constexpr | None = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    if bias is not None:
+        x = x + bias
+    topk_ = x.topk(k=k, dim=-1)
 
     topk_vals = topk_.values
     act_topk_vals = torch.empty_like(topk_vals)
@@ -301,52 +327,79 @@ def _topk_fwd_kernel(
         BLOCK_M = triton.next_power_of_2(topk_vals.shape[-1])
     _relu_fwd_kernel[(triton.cdiv(topk_vals.numel(), BLOCK_M),)](
         x_ptr=topk_vals,
+        bias_ptr=None,
         y_ptr=act_topk_vals,
         stride_x_m=topk_vals.stride(-1),
+        stride_bias_m=0,
         stride_y_m=act_topk_vals.stride(-1),
         x_numel=topk_vals.numel(),
+        dim_m=topk_vals.shape[-1],
         BLOCK_M=BLOCK_M,
     )
 
-    y = torch.zeros_like(x)
-    y.scatter_(dim=-1, index=topk_.indices, src=act_topk_vals)
-    return y
+    return topk_.indices, act_topk_vals
 
 
 class TopK(autograd.Function):
-    """Computes relu(topk(x, k)): https://github.com/openai/sparse_autoencoder."""
+    """
+    Computes relu(topk(x + bias, k)): https://github.com/openai/sparse_autoencoder.
+    """
 
     @staticmethod
     @contiguous
     @custom_fwd(device_type="cuda")
-    def forward(ctx: Any, x: torch.Tensor, k: int, dim: int = -1) -> Any:
-        assert k <= x.size(dim)
-        y = _topk_fwd_kernel(x=x, k=k, dim=dim)
-        ctx.save_for_backward(y)
-        return y
+    def forward(
+        ctx: Any,
+        x: Float[torch.Tensor, "*b m"],
+        k: int,
+        bias: Float[torch.Tensor, "m"] | None = None,
+    ) -> Tuple[Float[torch.Tensor, "*b k"], Float[torch.Tensor, "*b k"]]:
+        assert k <= x.size(-1)
+
+        topk_idxs, act_topk_vals = _topk_fwd_kernel(x=x, k=k, bias=bias)
+
+        ctx.save_for_backward(topk_idxs, act_topk_vals)
+        ctx.bias = True if bias is not None else False
+        ctx.dim_m = x.shape[-1]
+
+        return topk_idxs, act_topk_vals
 
     @staticmethod
     @contiguous
     @custom_bwd(device_type="cuda")
-    def backward(ctx: Any, dy: torch.Tensor) -> Tuple[torch.Tensor, None, None]:
-        (y,) = ctx.saved_tensors
+    def backward(
+        ctx: Any,
+        dtopk_idxs: Float[torch.Tensor, "*b k"] | None,
+        dact_topk_vals: Float[torch.Tensor, "*b k"],
+    ) -> Tuple[Float[torch.Tensor, "*b m"], None, Float[torch.Tensor, "m"] | None]:
+        topk_idxs, act_topk_vals = ctx.saved_tensors
+        dim_m = ctx.dim_m
 
-        y_numel, dim_m = y.numel(), y.shape[-1]
-        BLOCK_M = triton.next_power_of_2(dim_m)
+        batch, dim_k = act_topk_vals.shape[0], act_topk_vals.shape[-1]
+        act_topk_vals_numel = act_topk_vals.numel()
+        BLOCK_K = triton.next_power_of_2(dim_k)
 
-        dx = torch.empty_like(y)
-        grid = lambda META: (triton.cdiv(y_numel, META["BLOCK_M"]),)
+        topk_dx: Float[torch.Tensor, "*b k"] = torch.empty_like(act_topk_vals)
+        grid = lambda META: (triton.cdiv(act_topk_vals_numel, META["BLOCK_M"]),)
         _relu_bwd_kernel[grid](
-            x_ptr=y,
-            dy_ptr=dy,
-            dx_ptr=dx,
-            stride_x_m=y.stride(-1),
-            stride_dy_m=dy.stride(-1),
-            stride_dx_m=dx.stride(-1),
-            x_numel=y_numel,
-            BLOCK_M=BLOCK_M,
+            y_ptr=act_topk_vals,
+            dy_ptr=dact_topk_vals,
+            dx_ptr=topk_dx,
+            stride_y_m=act_topk_vals.stride(-1),
+            stride_dy_m=dact_topk_vals.stride(-1),
+            stride_dx_m=topk_dx.stride(-1),
+            y_numel=act_topk_vals_numel,
+            BLOCK_M=BLOCK_K,
         )
-        return dx, None, None
+
+        dx_size = list(act_topk_vals.shape)  # make mutable
+        dx_size[-1] = dim_m
+        dx: Float[torch.Tensor, "*b m"] = torch.zeros(
+            dx_size, dtype=act_topk_vals.dtype, device=dact_topk_vals.device
+        )
+        dx.scatter_(dim=-1, index=topk_idxs, src=topk_dx)
+        dbias = dx.clone().view(-1, dim_m).sum(dim=0) if ctx.bias else None
+        return dx, None, dbias
 
 
 topk = TopK.apply
@@ -361,43 +414,75 @@ class BatchTopK(autograd.Function):
     @staticmethod
     @contiguous
     @custom_fwd(device_type="cuda")
-    def forward(ctx: Any, x: torch.Tensor, k: int, dim: int = -1) -> torch.Tensor:
-        assert k <= x.size(dim)
+    def forward(
+        ctx: Any,
+        x: Float[torch.Tensor, "b l m"],
+        k: int,
+        bias: Float[torch.Tensor, "m"] | None = None,
+    ) -> Tuple[Float[torch.Tensor, "l bk"], Float[torch.Tensor, "l bk"]]:
+        assert k <= x.size(-1)
+        if len(x.shape) == 2:
+            x: Float[torch.Tensor, "b 1 m"] = x[:, None]
+
         batch, seq_len, dim_m = x.shape
-        y = _topk_fwd_kernel(
-            x=x.view(seq_len, -1),
+        # Note: Do not use `view()` or `reshape()` to rearrange: you get wrong
+        # arrangements depending on the tensor stride.
+        topk_idxs, act_topk_vals = _topk_fwd_kernel(
+            x=rearrange(x, "b l m -> l (b m)", m=dim_m),
             k=(k * batch),
-            dim=dim,
+            bias=(None if bias is None else bias.broadcast_to(batch, dim_m).flatten()),
             BLOCK_M=triton.next_power_of_2(dim_m),
         )
-        y = y.view(x.shape)
-        ctx.save_for_backward(y)
-        return y
+
+        ctx.save_for_backward(topk_idxs, act_topk_vals)
+        ctx.bias = True if bias is not None else False
+        ctx.batch = batch
+        ctx.dim_m = dim_m
+
+        return topk_idxs.squeeze(0), act_topk_vals.squeeze(0)
 
     @staticmethod
     @contiguous
     @custom_bwd(device_type="cuda")
-    def backward(ctx: Any, dy: torch.Tensor) -> Tuple[torch.Tensor, None, None]:
-        (y,) = ctx.saved_tensors
+    def backward(
+        ctx: Any,
+        dtopk_idxs: Float[torch.Tensor, "l bk"] | None,
+        dact_topk_vals: Float[torch.Tensor, "l bk"],
+    ) -> Tuple[Float[torch.Tensor, "b l m"], None, Float[torch.Tensor, "m"] | None]:
+        topk_idxs, act_topk_vals = ctx.saved_tensors
+        if len(act_topk_vals.shape) == 1:
+            topk_idxs: Float[torch.Tensor, "1 bk"] = topk_idxs[None]
+            act_topk_vals: Float[torch.Tensor, "1 bk"] = act_topk_vals[None]
+        batch = ctx.batch
+        dim_m = ctx.dim_m
 
-        y_ = y.reshape(y.shape[1], -1)
-        y_numel, dim_m = y_.numel(), y_.shape[-1]
-        BLOCK_M = triton.next_power_of_2(dim_m)
+        seq_len, dim_batch_k = act_topk_vals.shape[0], act_topk_vals.shape[-1]
+        act_topk_vals_numel = act_topk_vals.numel()
+        BLOCK_BK = triton.next_power_of_2(dim_batch_k)
 
-        dx = torch.empty_like(y_)
-        grid = lambda META: (triton.cdiv(y_numel, META["BLOCK_M"]),)
+        topk_dx: Float[torch.Tensor, "l bk"] = torch.empty_like(act_topk_vals)
+        grid = lambda META: (triton.cdiv(act_topk_vals_numel, META["BLOCK_M"]),)
         _relu_bwd_kernel[grid](
-            x_ptr=y_,
-            dy_ptr=dy,
-            dx_ptr=dx,
-            stride_x_m=y_.stride(-1),
-            stride_dy_m=dy.stride(-1),
-            stride_dx_m=dx.stride(-1),
-            x_numel=y_numel,
-            BLOCK_M=BLOCK_M,
+            y_ptr=act_topk_vals,
+            dy_ptr=dact_topk_vals,
+            dx_ptr=topk_dx,
+            stride_y_m=act_topk_vals.stride(-1),
+            stride_dy_m=dact_topk_vals.stride(-1),
+            stride_dx_m=topk_dx.stride(-1),
+            y_numel=act_topk_vals_numel,
+            BLOCK_M=BLOCK_BK,
         )
-        dx = dx.reshape(y.shape)
-        return dx, None, None
+
+        dx: Float[torch.Tensor, "l bm"] = torch.zeros(
+            seq_len,
+            batch * dim_m,
+            dtype=act_topk_vals.dtype,
+            device=dact_topk_vals.device,
+        )
+        dx.scatter_(dim=-1, index=topk_idxs, src=topk_dx)
+        dx: Float[torch.Tensor, "b l m"] = rearrange(dx, "l (b m) -> b l m", m=dim_m)
+        dbias = dx.clone().contiguous().view(-1, dim_m).sum(dim=0) if ctx.bias else None
+        return dx.squeeze(1), None, dbias
 
 
 batchtopk = BatchTopK.apply
@@ -446,7 +531,9 @@ class ProLU(autograd.Function):
     @staticmethod
     @contiguous
     @custom_fwd(device_type="cuda")
-    def forward(ctx: Any, x: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+    def forward(
+        ctx: Any, x: Float[torch.Tensor, "*b m"], bias: Float[torch.Tensor, "m"]
+    ) -> Float[torch.Tensor, "*b m"]:
         x_numel, dim_m = x.numel(), x.shape[-1]
         assert dim_m == bias.shape[-1]
         BLOCK_M = triton.next_power_of_2(dim_m)
@@ -480,16 +567,17 @@ class ProLU(autograd.Function):
         dx = torch.empty_like(y)
         grid = lambda META: (triton.cdiv(y_numel, META["BLOCK_M"]),)
         _relu_bwd_kernel[grid](
-            x_ptr=y,
+            y_ptr=y,
             dy_ptr=dy,
             dx_ptr=dx,
-            stride_x_m=y.stride(-1),
+            stride_y_m=y.stride(-1),
             stride_dy_m=dy.stride(-1),
             stride_dx_m=dx.stride(-1),
-            x_numel=y_numel,
+            y_numel=y_numel,
             BLOCK_M=BLOCK_M,
         )
-        return dx.clone(), dx.clone()
+        dbias = dx.clone().sum(dim=0)
+        return dx, dbias
 
 
 prolu = ProLU.apply

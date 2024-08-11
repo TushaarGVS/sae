@@ -1,7 +1,7 @@
 import torch
 
 from sparse_autoencoder.tms.toy_model import ToyModel, FastToyModel
-from sparse_autoencoder.tms.train import generate_feature_batch, mse_loss
+from sparse_autoencoder.tms.train_toy_model import generate_feature_batch, mse_loss
 
 toy_model = ToyModel(d_model=2, n_features=5)
 toy_model.cuda()

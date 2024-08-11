@@ -31,6 +31,11 @@ TmsWeightsTr = jt.Float[torch.Tensor, "f d"]
 TmsBias = jt.Float[torch.Tensor, "f"]
 TmsActivations = jt.Float[torch.Tensor, "*b d"]
 
+TmsSaePreBias = jt.Float[torch.Tensor, "d"]
+TmsSaeLatentBias = jt.Float[torch.Tensor, "f"]
+TmsSaeEncoderWeights = jt.Float[torch.Tensor, "d f"]
+TmsSaeDecoderWeights = jt.Float[torch.Tensor, "f d"]
+
 # RecurrentGemma (RG-LRU expansion = model dimension).
 Tokens = jt.Integer[torch.Tensor, "*b l"]
 Activations = jt.Float[torch.Tensor, "*b l d"]
