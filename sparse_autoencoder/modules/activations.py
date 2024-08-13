@@ -170,9 +170,11 @@ def _jumprelu_grad(
 @triton.jit
 def _jumprelu_fwd_kernel(
     x_ptr,
+    bias_ptr,
     log_threshold_ptr,
     y_ptr,
     stride_x_m: int,
+    stride_bias_m: int,
     stride_log_threshold_m: int,
     stride_y_m: int,
     dim_m: int,
@@ -186,6 +188,11 @@ def _jumprelu_fwd_kernel(
 
     x_ptrs = x_ptr + offsets_m * stride_x_m
     x = tl.load(x_ptrs, mask=mask)
+    if bias_ptr:
+        bias_offsets_m = (offsets_m * stride_bias_m) % dim_m
+        bias_ptrs = bias_ptr + bias_offsets_m
+        bias = tl.load(bias_ptrs, mask=mask)
+        x = x + bias
 
     # Thresholds are one per `dim_m`, hence, circular access is needed.
     log_threshold_offsets_m = (offsets_m * stride_log_threshold_m) % dim_m
@@ -203,11 +210,13 @@ def _jumprelu_fwd_kernel(
 @triton.jit
 def _jumprelu_bwd_kernel(
     x_ptr,
+    bias_ptr,
     log_threshold_ptr,
     dy_ptr,
     dx_ptr,
     dlog_threshold_ptr,
     stride_x_m: int,
+    stride_bias_m: int,
     stride_log_threshold_m: int,
     stride_dy_m: int,
     stride_dx_m: int,
@@ -222,8 +231,13 @@ def _jumprelu_bwd_kernel(
     mask = offsets_m < x_numel
 
     x_ptrs = x_ptr + offsets_m * stride_x_m
-    dy_ptrs = dy_ptr + offsets_m * stride_dy_m
     x = tl.load(x_ptrs, mask=mask)
+    if bias_ptr:
+        bias_offsets_m = (offsets_m * stride_bias_m) % dim_m
+        bias_ptrs = bias_ptr + bias_offsets_m
+        bias = tl.load(bias_ptrs, mask=mask)
+        x = x + bias
+    dy_ptrs = dy_ptr + offsets_m * stride_dy_m
     dy = tl.load(dy_ptrs, mask=mask)
 
     log_threshold_offsets_m = (offsets_m * stride_log_threshold_m) % dim_m
@@ -246,26 +260,33 @@ def _jumprelu_bwd_kernel(
 
 
 class JumpReLU(autograd.Function):
-    """Computes jumprelu(x, log_threshold): https://arxiv.org/pdf/2407.14435."""
+    """Computes jumprelu(x + bias, log_threshold): https://arxiv.org/pdf/2407.14435."""
 
     @staticmethod
     @contiguous
     @custom_fwd(device_type="cuda")
-    def forward(ctx: Any, x: torch.Tensor, log_threshold: torch.Tensor) -> torch.Tensor:
+    def forward(
+        ctx: Any,
+        x: Float[torch.Tensor, "*b m"],
+        log_threshold: Float[torch.Tensor, "m"],
+        bias: Float[torch.Tensor, "m"] | None = None,
+    ) -> Float[torch.Tensor, "*b m"]:
         x_numel, dim_m = x.numel(), x.shape[-1]
         assert dim_m == log_threshold.shape[0]
         BLOCK_M = triton.next_power_of_2(dim_m)
 
-        ctx.save_for_backward(x, log_threshold)
+        ctx.save_for_backward(x, log_threshold, bias)
 
         y = torch.empty_like(x)
         # Grid: (x_numel/dim_m,) blocks, with `dim_m` elements per block.
         grid = lambda META: (triton.cdiv(x_numel, META["BLOCK_M"]),)
         _jumprelu_fwd_kernel[grid](
             x_ptr=x,
+            bias_ptr=bias,
             log_threshold_ptr=log_threshold,
             y_ptr=y,
             stride_x_m=x.stride(-1),
+            stride_bias_m=bias.stride(-1) if bias is not None else 0,
             stride_log_threshold_m=log_threshold.stride(-1),
             stride_y_m=y.stride(-1),
             dim_m=dim_m,
@@ -277,8 +298,12 @@ class JumpReLU(autograd.Function):
     @staticmethod
     @contiguous
     @custom_bwd(device_type="cuda")
-    def backward(ctx: Any, dy: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        x, log_threshold = ctx.saved_tensors
+    def backward(ctx: Any, dy: Float[torch.Tensor, "*b m"]) -> Tuple[
+        Float[torch.Tensor, "*b m"],
+        Float[torch.Tensor, "m"],
+        Float[torch.Tensor, "m"] | None,
+    ]:
+        x, log_threshold, bias = ctx.saved_tensors
 
         bandwidth = 0.001
         x_numel, dim_m = x.numel(), x.shape[-1]
@@ -289,11 +314,13 @@ class JumpReLU(autograd.Function):
         grid = lambda META: (triton.cdiv(x_numel, META["BLOCK_M"]),)
         _jumprelu_bwd_kernel[grid](
             x_ptr=x,
+            bias_ptr=bias,
             log_threshold_ptr=log_threshold,
             dy_ptr=dy,
             dx_ptr=dx,
             dlog_threshold_ptr=dlog_threshold,
             stride_x_m=x.stride(-1),
+            stride_bias_m=bias.stride(-1) if bias is not None else 0,
             stride_log_threshold_m=log_threshold.stride(-1),
             stride_dy_m=dy.stride(-1),
             stride_dx_m=dx.stride(-1),
@@ -303,7 +330,8 @@ class JumpReLU(autograd.Function):
             x_numel=x_numel,
             BLOCK_M=BLOCK_M,
         )
-        return dx, dlog_threshold
+        dbias = dx.clone().view(-1, dim_m).sum(dim=0) if bias is not None else None
+        return dx, dlog_threshold, dbias
 
 
 jumprelu = JumpReLU.apply
@@ -311,11 +339,11 @@ jumprelu = JumpReLU.apply
 
 @torch.compile(fullgraph=True, backend="inductor")
 def _topk_fwd_kernel(
-    x: torch.Tensor,
+    x: Float[torch.Tensor, "*b m"],
     k: int,
-    bias: torch.Tensor | None = None,
+    bias: Float[torch.Tensor, "m"] | None = None,
     BLOCK_M: tl.constexpr | None = None,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[Float[torch.Tensor, "*b k"], Float[torch.Tensor, "*b k"]]:
     if bias is not None:
         x = x + bias
     topk_ = x.topk(k=k, dim=-1)
@@ -337,6 +365,8 @@ def _topk_fwd_kernel(
         BLOCK_M=BLOCK_M,
     )
 
+    # Note: `act_topk_vals` could have zero values from both `topk` and `relu`; this is
+    # unlike coo tensors, where zero values are not stored at all.
     return topk_.indices, act_topk_vals
 
 

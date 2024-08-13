@@ -135,6 +135,11 @@ def test_jumprelu() -> None:
     y_ref = x * torch.where(x > torch.exp(log_threshold), 1.0, 0.0)
     _test_activation(x, jumprelu, y_ref, "jumprelu", log_threshold)
 
+    bias = get_fl_tensor(torch.Size([4096]), factory_kwargs=_factory_kwargs)
+    x_ = x + bias
+    y_ref = x_ * torch.where(x_ > torch.exp(log_threshold), 1.0, 0.0)
+    _test_activation_with_bias(x, bias, jumprelu, y_ref, "jumprelu+bias", log_threshold)
+
 
 def test_topk() -> None:
     x = get_fl_tensor(torch.Size([64, 32, 4096]), factory_kwargs=_factory_kwargs)
