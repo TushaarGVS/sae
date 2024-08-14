@@ -1,8 +1,10 @@
 # Adapted from openai/sparse_autoencoder: https://github.com/openai/sparse_autoencoder.
 
-from typing import Any, Tuple
+from typing import Any, Tuple, Dict
 
 import torch
+import torch.nn.functional as F
+import triton
 from jaxtyping import Float
 from torch import autograd
 from torch import nn
@@ -10,7 +12,10 @@ from torch.amp import custom_fwd, custom_bwd
 
 import sparse_autoencoder.array_typing as at
 from sparse_autoencoder.modules.activations import _topk_fwd_kernel
-from sparse_autoencoder.modules.sparse_matmul import dense_transpose_sparse_matmul
+from sparse_autoencoder.modules.sparse_matmul import (
+    _dense_transpose_sparse_matmul_fwd_kernel,
+    sparse_dense_matmul,
+)
 from sparse_autoencoder.modules.utils import contiguous
 
 
@@ -22,6 +27,68 @@ def auxk_mask_(
     dead_mask = stats_last_nonzero > dead_steps_threshold
     x *= dead_mask  # inplace to save memory
     return x
+
+
+class TmsAutoencoder(nn.Module):
+    def __init__(
+        self,
+        n_features: int,
+        d_model: int,
+        k: int,
+        dead_steps_threshold: int,
+        auxk: int | None = None,
+    ):
+        super().__init__()
+
+        self.n_features = n_features
+        self.d_model = d_model
+        self.k = k
+        self.dead_steps_threshold = dead_steps_threshold
+        self.auxk = auxk
+
+        self.pre_bias: at.TmsSaePreBias = nn.Parameter(torch.zeros(d_model))
+        self.latent_bias: at.TmsSaeLatentBias = nn.Parameter(torch.zeros(d_model))
+        self.W_enc: at.TmsSaeEncoderWeights = nn.Parameter(
+            nn.init.xavier_normal_(torch.empty(d_model, n_features))
+        )
+        self.W_dec: at.TmsSaeDecoderWeights = nn.Parameter(self.W_enc.data.clone().T)
+        self._unit_norm_decoder()
+
+        self.register_buffer(
+            "stats_last_nonzero", torch.zeros(n_features, dtype=torch.long)
+        )
+
+    def _unit_norm_decoder(self: "TmsFastAutoencoder") -> None:
+        self.W_dec.data /= self.W_dec.data.norm(dim=1)
+
+    def forward(
+        self, x: at.TmsActivations
+    ) -> Tuple[at.TmsActivations, Dict[str, Float[torch.Tensor, "*b auxk"] | None]]:
+        latents_pre_act = ((x - self.pre_bias) @ self.W_enc) + self.latent_bias
+        topk_idxs, topk_vals = latents_pre_act.topk(dim=-1, k=self.k)
+        topk_vals = F.relu(topk_vals)
+
+        tmp = torch.zeros_like(self.stats_last_nonzero)
+        tmp.scatter_add_(
+            0,
+            topk_idxs.reshape(-1),
+            (topk_idxs > 1e-3).to(tmp.dtype).reshape(-1),
+        )
+        self.stats_last_nonzero *= 1 - tmp.clamp(max=1)
+        self.stats_last_nonzero += 1
+        if self.auxk is not None:
+            latents_pre_act = auxk_mask_(
+                latents_pre_act, self.stats_last_nonzero, self.dead_steps_threshold
+            )
+            auxk_idxs, auxk_vals = latents_pre_act.topk(dim=-1, k=self.auxk)
+            auxk_vals = F.relu(auxk_vals)
+        else:
+            auxk_idxs, auxk_vals = None, None
+
+        latents = torch.zeros_like(latents_pre_act)
+        latents.scatter_(dim=-1, index=topk_idxs, src=topk_vals)
+        recons = (latents @ self.W_dec) + self.pre_bias
+        return recons, dict(auxk_idxs=auxk_idxs, auxk_vals=auxk_vals)
 
 
 class FastEncoderAutograd(autograd.Function):
@@ -39,10 +106,11 @@ class FastEncoderAutograd(autograd.Function):
         stats_last_nonzero: Float[torch.Tensor, "f"],
         dead_steps_threshold: int,
     ) -> Tuple[
-        Float[torch.Tensor, "b k"],
-        Float[torch.Tensor, "b k"],
-        Float[torch.Tensor, "b auxk"],
-        Float[torch.Tensor, "b auxk"],
+        Float[torch.Tensor, "*b k"],
+        Float[torch.Tensor, "*b k"],
+        Float[torch.Tensor, "*b auxk"],
+        Float[torch.Tensor, "*b auxk"],
+        Float[torch.Tensor, "f"],
     ]:
         x_pre_bias_diff = x - pre_bias
         latents_pre_act: at.TmsFeatures = x_pre_bias_diff @ W_enc
@@ -67,12 +135,14 @@ class FastEncoderAutograd(autograd.Function):
             )
 
         ctx.save_for_backward(x_pre_bias_diff, W_enc, topk_idxs, auxk_idxs)
-        return topk_idxs, topk_vals, auxk_idxs, auxk_vals
+        return topk_idxs, topk_vals, auxk_idxs, auxk_vals, stats_last_nonzero
 
     @staticmethod
     @contiguous
     @custom_bwd(device_type="cuda")
-    def backward(ctx: Any, dtopk_idxs, dtopk_vals, dauxk_idxs, dauxk_vals) -> Tuple[
+    def backward(
+        ctx: Any, dtopk_idxs, dtopk_vals, dauxk_idxs, dauxk_vals, dstats_last_nonzero
+    ) -> Tuple[
         None,
         Float[torch.Tensor, "d"],
         Float[torch.Tensor, "d f"],
@@ -84,7 +154,7 @@ class FastEncoderAutograd(autograd.Function):
     ]:
         """
         dpre_bias = -(dy @ W_enc.T).sum(0) = -dy.sum(0) @ W_enc.T
-        dW_enc = (x - pre_bias) @ dy: dense.T @ sparse
+        dW_enc = (x - pre_bias).T: [D B] @ dy: [B F] (= dense.T @ sparse)
         dlatent_bias = dy.sum(0)
         """
         x_pre_bias_diff, W_enc, topk_idxs, auxk_idxs = ctx.saved_tensors
@@ -104,8 +174,29 @@ class FastEncoderAutograd(autograd.Function):
         dy_sum0.scatter_add_(
             dim=0, index=all_idxs.view(-1), src=all_dvals.view(-1).to(torch.float32)
         )
-        dW_enc = dense_transpose_sparse_matmul(
-            x_pre_bias_diff, all_idxs, all_dvals, n_features
+
+        dim_b, dim_k_auxk = all_idxs.shape
+        dim_d = x_pre_bias_diff.shape[1]
+        dW_enc = torch.zeros(
+            dim_d, n_features, device=W_enc.device, dtype=all_idxs.dtype
+        )
+        _dense_transpose_sparse_matmul_fwd_kernel[(dim_k_auxk,)](
+            dense_ptr=x_pre_bias_diff,
+            sparse_idxs_ptr=all_idxs,
+            sparse_vals_ptr=all_dvals,
+            out_ptr=dW_enc,
+            stride_dense_n=x_pre_bias_diff.stride(0),
+            stride_dense_a=x_pre_bias_diff.stride(1),
+            stride_sparse_idxs_n=all_idxs.stride(0),
+            stride_sparse_idxs_k=all_idxs.stride(1),
+            stride_sparse_vals_n=all_dvals.stride(0),
+            stride_sparse_vals_k=all_dvals.stride(1),
+            stride_out_a=dW_enc.stride(0),
+            stride_out_b=dW_enc.stride(1),
+            dim_n=dim_b,
+            dim_a=dim_d,
+            BLOCK_N=triton.next_power_of_2(dim_b),
+            BLOCK_A=triton.next_power_of_2(dim_d),
         )
         return None, -dy_sum0 @ W_enc.T, dW_enc, dy_sum0, None, None, None, None
 
@@ -151,12 +242,16 @@ class TmsFastAutoencoder(nn.Module):
             "stats_last_nonzero", torch.zeros(n_features, dtype=torch.long)
         )
 
-    def _unit_norm_decoder(self) -> None:
+    @classmethod
+    def _update_stats(cls, stats_last_nonzero: Float[torch.Tensor, "f"]) -> None:
+        cls.stats_last_nonzero = stats_last_nonzero
+
+    def _unit_norm_decoder(self: "TmsFastAutoencoder") -> None:
         """Normalize latent directions of decoder to unit norm."""
         self.W_dec.data /= self.W_dec.data.norm(dim=1)
 
-    def forward(self, x: at.TmsActivations):
-        return fast_encoder_autograd(
+    def encode(self, x: at.TmsActivations):
+        topk_idxs, topk_vals, auxk_idxs, auxk_vals, _stats = fast_encoder_autograd(
             x,
             self.pre_bias,
             self.W_enc,
@@ -166,3 +261,19 @@ class TmsFastAutoencoder(nn.Module):
             self.stats_last_nonzero,
             self.dead_steps_threshold,
         )
+        self._update_stats(_stats)
+        return topk_idxs, topk_vals, auxk_idxs, auxk_vals
+
+    def decode(
+        self,
+        topk_idxs: Float[torch.Tensor, "*b k"],
+        topk_vals: Float[torch.Tensor, "*b k"],
+    ) -> at.TmsActivations:
+        return sparse_dense_matmul(topk_idxs, topk_vals, self.W_dec, self.pre_bias)
+
+    def forward(
+        self, x: at.TmsActivations
+    ) -> Tuple[at.TmsActivations, Dict[str, Float[torch.Tensor, "*b auxk"] | None]]:
+        topk_idxs, topk_vals, auxk_idxs, auxk_vals = self.encode(x)
+        recons: at.TmsActivations = self.decode_sparse(topk_idxs, topk_vals)
+        return recons, dict(auxk_idxs=auxk_idxs, auxk_vals=auxk_vals)

@@ -34,6 +34,14 @@ def _get_elem(tensor: tl.tensor, idx: tl.int64, dtype: tl.dtype):
 
 
 @triton.jit
+def _insert_at_idx(
+    numel: tl.int64, idx: tl.int64, value: tl.float32, dtype: tl.dtype
+) -> None:
+    """Returns a tensor of `numel` zeros with `tensor[idx] = value`."""
+    return tl.where(tl.arange(0, numel) == idx, value, tl.zeros((numel,), dtype=dtype))
+
+
+@triton.jit
 def _coo_sparse_dense_matmul_fwd_kernel(
     coo_idxs_ptr,
     coo_vals_ptr,
@@ -267,6 +275,291 @@ coo_sparse_dense_matmul = CooSparseDenseMatmul.apply
 
 
 @triton.jit
+def _sparse_dense_matmul_fwd_kernel(
+    sparse_idxs_ptr,
+    sparse_vals_ptr,
+    dense_ptr,
+    bias_ptr,
+    out_ptr,
+    stride_sparse_idxs_a: int,
+    stride_sparse_idxs_k: int,
+    stride_sparse_vals_a: int,
+    stride_sparse_vals_k: int,
+    stride_dense_n: int,
+    stride_dense_b: int,
+    stride_bias_b: int,
+    stride_out_a: int,
+    stride_out_b: int,
+    dim_k: int,
+    dim_b: int,
+    BLOCK_K: tl.constexpr,
+    BLOCK_B: tl.constexpr,
+):
+    """Computes sparse: [A N] @ dense: [N B] + bias: [B] = [A B]."""
+    pid_a = tl.program_id(0)
+
+    offsets_k = tl.arange(0, BLOCK_K)
+    mask_k = offsets_k < dim_k
+
+    sparse_idxs_ptrs = (
+        sparse_idxs_ptr
+        + pid_a * stride_sparse_idxs_a
+        + offsets_k * stride_sparse_idxs_k
+    )
+    sparse_vals_ptrs = (
+        sparse_vals_ptr
+        + pid_a * stride_sparse_vals_a
+        + offsets_k * stride_sparse_vals_k
+    )
+    sparse_idxs = tl.load(sparse_idxs_ptrs, mask=mask_k)
+    sparse_vals = tl.load(sparse_vals_ptrs, mask=mask_k)
+
+    offsets_b = tl.arange(0, BLOCK_B)
+    mask_b = offsets_b < dim_b
+
+    accum = tl.zeros((BLOCK_B,), dtype=tl.float32)
+    for k in range(dim_k):
+        sparse_val = _get_elem(sparse_vals, k, dtype=sparse_vals.dtype)
+        if sparse_val != 0:
+            sparse_idx = _get_elem(sparse_idxs, k, dtype=sparse_idxs.dtype)
+            dense_ptrs = (
+                dense_ptr + sparse_idx * stride_dense_n + offsets_b * stride_dense_b
+            )
+            dense_row = tl.load(dense_ptrs, mask=mask_b)
+            accum += sparse_val * dense_row
+
+    if bias_ptr:
+        bias_ptrs = bias_ptr + offsets_b * stride_bias_b
+        bias = tl.load(bias_ptrs, mask=mask_b)
+        accum = accum + bias
+
+    out_ptrs = out_ptr + pid_a * stride_out_a + offsets_b * stride_out_b
+    tl.store(out_ptrs, accum.to(out_ptr.dtype.element_ty), mask=mask_b)
+
+
+@triton.jit
+def _dense_dense_sparseout_matmul(
+    dense1_ptr,
+    dense2_ptr,
+    at_idxs_ptr,
+    out_ptr,
+    stride_dense1_a: int,
+    stride_dense1_n: int,
+    stride_dense2_n: int,
+    stride_dense2_b: int,
+    stride_at_idxs_a: int,
+    stride_at_idxs_k: int,
+    stride_out_a: int,
+    stride_out_k: int,
+    dim_k: int,
+    dim_n: int,
+    BLOCK_K: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    """Computes (dense1: [A N] @ dense2: [N B]).gather(1, at_idxs: [A K]) = [A K]."""
+    pid_a = tl.program_id(0)
+
+    offsets_k = tl.arange(0, BLOCK_K)
+    mask_k = offsets_k < dim_k
+    at_idxs_ptrs = at_idxs_ptr + pid_a * stride_at_idxs_a + offsets_k * stride_at_idxs_k
+    at_idxs = tl.load(at_idxs_ptrs, mask=mask_k)
+
+    offsets_n = tl.arange(0, BLOCK_N)
+    mask_n = offsets_n < dim_n
+    dense1_ptrs = dense1_ptr + pid_a * stride_dense1_a + offsets_n * stride_dense1_n
+    dense1_row = tl.load(dense1_ptrs, mask=mask_n)
+
+    accum = tl.zeros((BLOCK_K,), dtype=tl.float32)
+    for k in range(dim_k):  # inefficient for large `dim_k`
+        at_idx = _get_elem(at_idxs, k, at_idxs.dtype)
+        dense2_ptrs = (
+            dense2_ptr + at_idx * stride_dense2_b + offsets_n * stride_dense2_n
+        )
+        dense2_col = tl.load(dense2_ptrs, mask=mask_n)
+        accum += _insert_at_idx(BLOCK_K, k, tl.sum(dense1_row * dense2_col), tl.int64)
+
+    out_ptrs = out_ptr + pid_a * stride_out_a + offsets_k * stride_out_k
+    tl.store(out_ptrs, accum.to(out_ptr.dtype.element_ty), mask=mask_k)
+
+
+@triton.jit
+def _sparse_transpose_dense_matmul(
+    sparse_idxs_ptr,
+    sparse_vals_ptr,
+    dense_ptr,
+    out_ptr,
+    stride_sparse_idxs_n: int,
+    stride_sparse_idxs_k: int,
+    stride_sparse_vals_n: int,
+    stride_sparse_vals_k: int,
+    stride_dense_n: int,
+    stride_dense_b: int,
+    stride_out_a: int,
+    stride_out_b: int,
+    dim_k: int,
+    dim_b: int,
+    BLOCK_K: tl.constexpr,
+    BLOCK_B: tl.constexpr,
+):
+    """
+    Computes (sparse.T: [A N] @ dense: [N B] = [A B]).
+    - sparse_idxs, sparse_vals: [N K]
+    """
+    pid_n = tl.program_id(0)
+    pid_b = tl.program_id(1)
+
+    offsets_k = tl.arange(0, BLOCK_K)
+    mask_k = offsets_k < dim_k
+    sparse_idxs_ptrs = (
+        sparse_idxs_ptr
+        + pid_n * stride_sparse_idxs_n
+        + offsets_k * stride_sparse_idxs_k
+    )
+    sparse_vals_ptrs = (
+        sparse_vals_ptr
+        + pid_n * stride_sparse_vals_n
+        + offsets_k * stride_sparse_vals_k
+    )
+    sparse_idxs = tl.load(sparse_idxs_ptrs, mask=mask_k)
+    sparse_vals = tl.load(sparse_vals_ptrs, mask=mask_k)
+
+    offsets_b = pid_b * BLOCK_B + tl.arange(0, BLOCK_B)
+    mask_b = offsets_b < dim_b
+    dense_ptrs = dense_ptr + pid_n * stride_dense_n + offsets_b * stride_dense_b
+    dense_row = tl.load(dense_ptrs, mask=mask_b)
+
+    # 2D block pointers of `sparse_idxs` rows and all `dim_b` columns.
+    out_ptrs = (
+        out_ptr + sparse_idxs[:, None] * stride_out_a + offsets_b[None] * stride_out_b
+    )
+    accum = sparse_vals[:, None] * dense_row[None]
+    tl.atomic_add(out_ptrs, accum.to(out_ptr.dtype.element_ty), mask=mask_b[None])
+
+
+class SparseDenseMatmul(autograd.Function):
+    """Computes (sparse: [A N] @ dense: [N B] + bias: [B] = [A B])."""
+
+    @staticmethod
+    @contiguous
+    @custom_fwd(device_type="cuda")
+    def forward(
+        ctx: Any,
+        sparse_idxs: Float[torch.Tensor, "A K"],
+        sparse_vals: Float[torch.Tensor, "A K"],
+        dense: Float[torch.Tensor, "N B"],
+        bias: Float[torch.Tensor, "B"] | None = None,
+    ) -> Float[torch.Tensor, "A B"]:
+        assert sparse_idxs.shape == sparse_vals.shape
+        assert bias is None or bias.shape[-1] == dense.shape[1]
+        ctx.save_for_backward(sparse_idxs, sparse_vals, dense)
+        ctx.bias = True if bias is not None else False
+
+        dim_a, dim_k = sparse_vals.shape
+        dim_b = dense.shape[-1]
+        out = torch.zeros(dim_a, dim_b, device=dense.device, dtype=sparse_vals.dtype)
+
+        BLOCK_K = triton.next_power_of_2(dim_k)
+        BLOCK_B = triton.next_power_of_2(dim_b)
+        _sparse_dense_matmul_fwd_kernel[(dim_a,)](
+            sparse_idxs_ptr=sparse_idxs,
+            sparse_vals_ptr=sparse_vals,
+            dense_ptr=dense,
+            bias_ptr=bias,
+            out_ptr=out,
+            stride_sparse_idxs_a=sparse_idxs.stride(0),
+            stride_sparse_idxs_k=sparse_idxs.stride(1),
+            stride_sparse_vals_a=sparse_vals.stride(0),
+            stride_sparse_vals_k=sparse_vals.stride(1),
+            stride_dense_n=dense.stride(0),
+            stride_dense_b=dense.stride(1),
+            stride_bias_b=bias.stride(0) if bias is not None else 0,
+            stride_out_a=out.stride(0),
+            stride_out_b=out.stride(1),
+            dim_k=dim_k,
+            dim_b=dim_b,
+            BLOCK_K=BLOCK_K,
+            BLOCK_B=BLOCK_B,
+        )
+        return out
+
+    @staticmethod
+    @contiguous
+    @custom_bwd(device_type="cuda")
+    def backward(ctx: Any, dy: Float[torch.Tensor, "A B"]) -> Tuple[
+        None,
+        Float[torch.Tensor, "A K"],
+        Float[torch.Tensor, "N B"],
+        Float[torch.Tensor, "B"] | None,
+    ]:
+        """
+        d(sparse @ dense + bias)/dsparse = dy @ dense.T
+        d(sparse @ dense + bias)/ddense = sparse.T @ dy
+        sparse @ dense + bias)/dbias = dy.sum(0)
+        """
+        sparse_idxs, sparse_vals, dense = ctx.saved_tensors
+        dbias = dy.sum(0) if ctx.bias else None
+        dim_a, dim_b = dy.shape
+        dim_k = sparse_vals.shape[1]
+        dim_n = dense.shape[0]
+
+        if dim_k > 512:
+            # Note: naive implementation is faster for large `dim_k`.
+            dsparse: Float[torch.Tensor, "A K"] = (dy @ dense.T).gather(1, sparse_idxs)
+        else:
+            dense_tr = dense.T.contiguous()
+            dsparse = torch.zeros(dim_a, dim_k, device=dy.device, dtype=dy.dtype)
+            BLOCK_K = triton.next_power_of_2(dim_k)
+            BLOCK_B = triton.next_power_of_2(dim_b)
+            _dense_dense_sparseout_matmul[(dim_a,)](
+                dense1_ptr=dy,
+                dense2_ptr=dense_tr,
+                at_idxs_ptr=sparse_idxs,
+                out_ptr=dsparse,
+                stride_dense1_a=dy.stride(0),
+                stride_dense1_n=dy.stride(1),
+                stride_dense2_n=dense_tr.stride(0),
+                stride_dense2_b=dense_tr.stride(1),
+                stride_at_idxs_a=sparse_idxs.stride(0),
+                stride_at_idxs_k=sparse_idxs.stride(1),
+                stride_out_a=dsparse.stride(0),
+                stride_out_k=dsparse.stride(1),
+                dim_k=dim_k,
+                dim_n=dim_b,
+                BLOCK_K=BLOCK_K,
+                BLOCK_N=BLOCK_B,
+            )
+
+        ddense = torch.zeros(dim_n, dim_b, device=dy.device, dtype=dy.dtype)
+        BLOCK_K = triton.next_power_of_2(dim_k)
+        # Note: when BLOCK_K > 256, dim = 4096, Triton numel limits are exceeded.
+        BLOCK_B = 1024
+        grid = lambda META: (dim_a, triton.cdiv(dim_b, META["BLOCK_B"]))
+        _sparse_transpose_dense_matmul[grid](
+            sparse_idxs_ptr=sparse_idxs,
+            sparse_vals_ptr=sparse_vals,
+            dense_ptr=dy,
+            out_ptr=ddense,
+            stride_sparse_idxs_n=sparse_idxs.stride(0),
+            stride_sparse_idxs_k=sparse_idxs.stride(1),
+            stride_sparse_vals_n=sparse_vals.stride(0),
+            stride_sparse_vals_k=sparse_vals.stride(1),
+            stride_dense_n=dy.stride(0),
+            stride_dense_b=dy.stride(1),
+            stride_out_a=ddense.stride(0),
+            stride_out_b=ddense.stride(1),
+            dim_k=dim_k,
+            dim_b=dim_b,
+            BLOCK_K=BLOCK_K,
+            BLOCK_B=BLOCK_B,
+        )
+
+        return None, dsparse, ddense, dbias
+
+
+sparse_dense_matmul = SparseDenseMatmul.apply
+
+
+@triton.jit
 def _dense_transpose_sparse_matmul_fwd_kernel(
     dense_ptr,
     sparse_idxs_ptr,
@@ -337,6 +630,7 @@ class DenseTransposeSparseMatmul(autograd.Function):
     ) -> Float[torch.Tensor, "A B"]:
         assert sparse_idxs.shape == sparse_vals.shape
         assert dense.shape[0] == sparse_vals.shape[0]
+        ctx.save_for_backward(dense, sparse_idxs, sparse_vals)
 
         dim_n, dim_k = sparse_idxs.shape
         dim_a = dense.shape[1]
@@ -368,8 +662,68 @@ class DenseTransposeSparseMatmul(autograd.Function):
     @staticmethod
     @contiguous
     @custom_bwd(device_type="cuda")
-    def backward(ctx: Any, dy: torch.Tensor) -> Any:
-        pass
+    def backward(
+        ctx: Any, dy: Float[torch.Tensor, "A B"]
+    ) -> Tuple[Float[torch.Tensor, "N B"], None, Float[torch.Tensor, "N K"], None]:
+        """
+        d(dense.T @ sparse)/ddense = sparse: [N B] @ dy.T: [B A] = [N A]
+        d(dense.T @ sparse)/dsparse = dense: [N A] @ dy: [A B] = [N B]
+        """
+        dense, sparse_idxs, sparse_vals = ctx.saved_tensors
+        dim_n, dim_a = dense.shape
+        dim_k = sparse_idxs.shape[1]
+
+        ddense = torch.zeros(dim_n, dim_a, device=dy.device, dtype=sparse_vals.dtype)
+        dy_tr = dy.T.contiguous()  # [B A]
+        BLOCK_K = triton.next_power_of_2(dim_k)
+        BLOCK_A = triton.next_power_of_2(dim_a)
+        _sparse_dense_matmul_fwd_kernel[(dim_n,)](
+            sparse_idxs_ptr=sparse_idxs,
+            sparse_vals_ptr=sparse_vals,
+            dense_ptr=dy_tr,
+            bias_ptr=None,
+            out_ptr=ddense,
+            stride_sparse_idxs_a=sparse_idxs.stride(0),
+            stride_sparse_idxs_k=sparse_idxs.stride(1),
+            stride_sparse_vals_a=sparse_vals.stride(0),
+            stride_sparse_vals_k=sparse_vals.stride(1),
+            stride_dense_n=dy_tr.stride(0),
+            stride_dense_b=dy_tr.stride(1),
+            stride_bias_b=0,
+            stride_out_a=ddense.stride(0),
+            stride_out_b=ddense.stride(1),
+            dim_k=dim_k,
+            dim_b=dim_a,
+            BLOCK_K=BLOCK_K,
+            BLOCK_B=BLOCK_A,
+        )
+
+        if dim_k > 512:
+            dsparse: Float[torch.Tensor, "N K"] = (dense @ dy).gather(1, sparse_idxs)
+        else:
+            dsparse = torch.zeros(dim_n, dim_k, device=dy.device, dtype=dense.dtype)
+            BLOCK_K = triton.next_power_of_2(dim_k)
+            BLOCK_A = triton.next_power_of_2(dim_a)
+            _dense_dense_sparseout_matmul[(dim_n,)](
+                dense1_ptr=dense,
+                dense2_ptr=dy,
+                at_idxs_ptr=sparse_idxs,
+                out_ptr=dsparse,
+                stride_dense1_a=dense.stride(0),
+                stride_dense1_n=dense.stride(1),
+                stride_dense2_n=dy.stride(0),
+                stride_dense2_b=dy.stride(1),
+                stride_at_idxs_a=sparse_idxs.stride(0),
+                stride_at_idxs_k=sparse_idxs.stride(1),
+                stride_out_a=dsparse.stride(0),
+                stride_out_k=dsparse.stride(1),
+                dim_k=dim_k,
+                dim_n=dim_a,
+                BLOCK_K=BLOCK_K,
+                BLOCK_N=BLOCK_A,
+            )
+
+        return ddense, None, dsparse, None
 
 
 dense_transpose_sparse_matmul = DenseTransposeSparseMatmul.apply
