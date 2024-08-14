@@ -532,7 +532,7 @@ class SparseDenseMatmul(autograd.Function):
         ddense = torch.zeros(dim_n, dim_b, device=dy.device, dtype=dy.dtype)
         BLOCK_K = triton.next_power_of_2(dim_k)
         # Note: when BLOCK_K > 256, dim = 4096, Triton numel limits are exceeded.
-        BLOCK_B = 1024
+        BLOCK_B = 512
         grid = lambda META: (dim_a, triton.cdiv(dim_b, META["BLOCK_B"]))
         _sparse_transpose_dense_matmul[grid](
             sparse_idxs_ptr=sparse_idxs,
@@ -578,7 +578,7 @@ def _dense_transpose_sparse_matmul_fwd_kernel(
     BLOCK_N: tl.constexpr,
     BLOCK_A: tl.constexpr,
 ) -> None:
-    """Computes dense.T @ sparse."""
+    """Computes dense.T: [A N] @ sparse: [N B] = [A B]."""
     pid_k = tl.program_id(0)
 
     offsets_n = tl.arange(0, BLOCK_N)

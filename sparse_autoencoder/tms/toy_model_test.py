@@ -11,8 +11,8 @@ fast_toy_model.cuda()
 
 
 def test_fast_toy_model(n_steps: int = 10):
-    fast_toy_model.W_tr = toy_model.W_tr
-    fast_toy_model.bias = toy_model.bias
+    fast_toy_model.W_tr.data = toy_model.W_tr.data
+    fast_toy_model.bias.data = toy_model.bias.data
 
     for step in range(n_steps):
         x = generate_feature_batch(batch_size=10, n_features=5, feature_probs=0.8)
@@ -22,8 +22,8 @@ def test_fast_toy_model(n_steps: int = 10):
         fwd_diff = torch.max(torch.abs(recons_toy_model - recons_fast_toy_model)).item()
         print(f"[{step}/{n_steps - 1}]\n\t+ {fwd_diff=}")
 
-        loss_toy_model = mse_loss(x, recons_toy_model)
-        loss_fast_toy_model = mse_loss(x, recons_fast_toy_model)
+        loss_toy_model = mse_loss(recons_toy_model, x)
+        loss_fast_toy_model = mse_loss(recons_fast_toy_model, x)
         loss_diff = torch.abs(loss_toy_model - loss_fast_toy_model).item()
         print(f"\t+ {loss_diff=}")
 
@@ -39,4 +39,6 @@ def test_fast_toy_model(n_steps: int = 10):
 
 
 if __name__ == "__main__":
+    torch.set_float32_matmul_precision("highest")  # only for testing
+
     test_fast_toy_model()

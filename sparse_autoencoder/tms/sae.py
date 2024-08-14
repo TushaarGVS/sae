@@ -47,7 +47,7 @@ class TmsAutoencoder(nn.Module):
         self.auxk = auxk
 
         self.pre_bias: at.TmsSaePreBias = nn.Parameter(torch.zeros(d_model))
-        self.latent_bias: at.TmsSaeLatentBias = nn.Parameter(torch.zeros(d_model))
+        self.latent_bias: at.TmsSaeLatentBias = nn.Parameter(torch.zeros(n_features))
         self.W_enc: at.TmsSaeEncoderWeights = nn.Parameter(
             nn.init.xavier_normal_(torch.empty(d_model, n_features))
         )
@@ -59,20 +59,21 @@ class TmsAutoencoder(nn.Module):
         )
 
     def _unit_norm_decoder(self: "TmsFastAutoencoder") -> None:
-        self.W_dec.data /= self.W_dec.data.norm(dim=1)
+        self.W_dec.data /= self.W_dec.data.norm(dim=1, keepdim=True)
 
     def forward(
         self, x: at.TmsActivations
     ) -> Tuple[at.TmsActivations, Dict[str, Float[torch.Tensor, "*b auxk"] | None]]:
         latents_pre_act = ((x - self.pre_bias) @ self.W_enc) + self.latent_bias
-        topk_idxs, topk_vals = latents_pre_act.topk(dim=-1, k=self.k)
+        latents_topk = latents_pre_act.topk(dim=-1, k=self.k)
+        topk_idxs, topk_vals = latents_topk.indices, latents_topk.values
         topk_vals = F.relu(topk_vals)
 
         tmp = torch.zeros_like(self.stats_last_nonzero)
         tmp.scatter_add_(
-            0,
-            topk_idxs.reshape(-1),
-            (topk_idxs > 1e-3).to(tmp.dtype).reshape(-1),
+            dim=0,
+            index=topk_idxs.reshape(-1),
+            src=(topk_idxs > 1e-3).to(tmp.dtype).reshape(-1),
         )
         self.stats_last_nonzero *= 1 - tmp.clamp(max=1)
         self.stats_last_nonzero += 1
@@ -80,7 +81,8 @@ class TmsAutoencoder(nn.Module):
             latents_pre_act = auxk_mask_(
                 latents_pre_act, self.stats_last_nonzero, self.dead_steps_threshold
             )
-            auxk_idxs, auxk_vals = latents_pre_act.topk(dim=-1, k=self.auxk)
+            auxk_topk = latents_pre_act.topk(dim=-1, k=self.auxk)
+            auxk_idxs, auxk_vals = auxk_topk.indices, auxk_topk.values
             auxk_vals = F.relu(auxk_vals)
         else:
             auxk_idxs, auxk_vals = None, None
@@ -178,8 +180,10 @@ class FastEncoderAutograd(autograd.Function):
         dim_b, dim_k_auxk = all_idxs.shape
         dim_d = x_pre_bias_diff.shape[1]
         dW_enc = torch.zeros(
-            dim_d, n_features, device=W_enc.device, dtype=all_idxs.dtype
+            dim_d, n_features, device=all_dvals.device, dtype=all_dvals.dtype
         )
+        BLOCK_B = triton.next_power_of_2(dim_b)
+        BLOCK_D = triton.next_power_of_2(dim_d)
         _dense_transpose_sparse_matmul_fwd_kernel[(dim_k_auxk,)](
             dense_ptr=x_pre_bias_diff,
             sparse_idxs_ptr=all_idxs,
@@ -195,8 +199,8 @@ class FastEncoderAutograd(autograd.Function):
             stride_out_b=dW_enc.stride(1),
             dim_n=dim_b,
             dim_a=dim_d,
-            BLOCK_N=triton.next_power_of_2(dim_b),
-            BLOCK_A=triton.next_power_of_2(dim_d),
+            BLOCK_N=BLOCK_B,
+            BLOCK_A=BLOCK_D,
         )
         return None, -dy_sum0 @ W_enc.T, dW_enc, dy_sum0, None, None, None, None
 
@@ -230,7 +234,7 @@ class TmsFastAutoencoder(nn.Module):
         self.auxk = auxk
 
         self.pre_bias: at.TmsSaePreBias = nn.Parameter(torch.zeros(d_model))
-        self.latent_bias: at.TmsSaeLatentBias = nn.Parameter(torch.zeros(d_model))
+        self.latent_bias: at.TmsSaeLatentBias = nn.Parameter(torch.zeros(n_features))
         self.W_enc: at.TmsSaeEncoderWeights = nn.Parameter(
             nn.init.xavier_normal_(torch.empty(d_model, n_features))
         )
@@ -248,7 +252,7 @@ class TmsFastAutoencoder(nn.Module):
 
     def _unit_norm_decoder(self: "TmsFastAutoencoder") -> None:
         """Normalize latent directions of decoder to unit norm."""
-        self.W_dec.data /= self.W_dec.data.norm(dim=1)
+        self.W_dec.data /= self.W_dec.data.norm(dim=1, keepdim=True)
 
     def encode(self, x: at.TmsActivations):
         topk_idxs, topk_vals, auxk_idxs, auxk_vals, _stats = fast_encoder_autograd(
@@ -275,5 +279,5 @@ class TmsFastAutoencoder(nn.Module):
         self, x: at.TmsActivations
     ) -> Tuple[at.TmsActivations, Dict[str, Float[torch.Tensor, "*b auxk"] | None]]:
         topk_idxs, topk_vals, auxk_idxs, auxk_vals = self.encode(x)
-        recons: at.TmsActivations = self.decode_sparse(topk_idxs, topk_vals)
+        recons: at.TmsActivations = self.decode(topk_idxs, topk_vals)
         return recons, dict(auxk_idxs=auxk_idxs, auxk_vals=auxk_vals)
