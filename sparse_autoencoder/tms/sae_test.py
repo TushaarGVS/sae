@@ -88,8 +88,10 @@ def test_fast_tms_sae(n_steps: int = 15):
             f"--"
         )
 
-        tms_sae._unit_norm_decoder()
-        fast_tms_sae._unit_norm_decoder()
+        tms_sae.unit_norm_decoder_()
+        tms_sae.unit_norm_decoder_grad_adjustment_()
+        fast_tms_sae.unit_norm_decoder_()
+        fast_tms_sae.unit_norm_decoder_grad_adjustment_()
 
 
 if __name__ == "__main__":

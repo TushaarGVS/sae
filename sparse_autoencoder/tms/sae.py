@@ -12,6 +12,7 @@ from torch.amp import custom_fwd, custom_bwd
 
 import sparse_autoencoder.array_typing as at
 from sparse_autoencoder.modules.activations import _topk_fwd_kernel
+from sparse_autoencoder.modules.norm import _unit_normalize_w_bwd_kernel
 from sparse_autoencoder.modules.sparse_matmul import (
     _dense_transpose_sparse_matmul_fwd_kernel,
     sparse_dense_matmul,
@@ -52,14 +53,23 @@ class TmsAutoencoder(nn.Module):
             nn.init.xavier_normal_(torch.empty(d_model, n_features))
         )
         self.W_dec: at.TmsSaeDecoderWeights = nn.Parameter(self.W_enc.data.clone().T)
-        self._unit_norm_decoder()
+        self._norms = None
+        self.unit_norm_decoder_()
 
         self.register_buffer(
             "stats_last_nonzero", torch.zeros(n_features, dtype=torch.long)
         )
 
-    def _unit_norm_decoder(self: "TmsFastAutoencoder") -> None:
-        self.W_dec.data /= self.W_dec.data.norm(dim=1, keepdim=True)
+    def unit_norm_decoder_(self: "TmsAutoencoder") -> None:
+        self._norms = self.W_dec.data.norm(dim=1, keepdim=True)
+        self.W_dec.data /= self._norms
+
+    def unit_norm_decoder_grad_adjustment_(self: "TmsAutoencoder") -> None:
+        assert self.W_dec.grad is not None and self._norms is not None
+        self.W_dec.grad -= self.W_dec.data * (self.W_dec.data * self.W_dec.grad).sum(
+            1, keepdim=True
+        )
+        self.W_dec.grad /= self._norms
 
     def forward(
         self, x: at.TmsActivations
@@ -239,20 +249,61 @@ class TmsFastAutoencoder(nn.Module):
             nn.init.xavier_normal_(torch.empty(d_model, n_features))
         )
         self.W_dec: at.TmsSaeDecoderWeights = nn.Parameter(self.W_enc.data.clone().T)
-        self._unit_norm_decoder()
+        self._norms = None
+        self.unit_norm_decoder_()
 
         # Last step where a neuron was noted to be nonzero.
         self.register_buffer(
             "stats_last_nonzero", torch.zeros(n_features, dtype=torch.long)
         )
 
+    def save_pretrained(self, model_filepath: str) -> None:
+        torch.save(self.state_dict(), model_filepath)
+
+    def from_pretrained(self, model_filepath: str):
+        state_dict = torch.load(
+            model_filepath, map_location=torch.device("cpu"), weights_only=True
+        )
+        self.load_state_dict(state_dict)
+
     @classmethod
     def _update_stats(cls, stats_last_nonzero: Float[torch.Tensor, "f"]) -> None:
         cls.stats_last_nonzero = stats_last_nonzero
 
-    def _unit_norm_decoder(self: "TmsFastAutoencoder") -> None:
-        """Normalize latent directions of decoder to unit norm."""
-        self.W_dec.data /= self.W_dec.data.norm(dim=1, keepdim=True)
+    def unit_norm_decoder_(self: "TmsFastAutoencoder") -> None:
+        """Inplace normalize latent directions of decoder to unit norm."""
+        self._norms = self.W_dec.data.norm(dim=1, keepdim=True)
+        self.W_dec.data /= self._norms
+
+    def unit_norm_decoder_grad_adjustment_(self: "TmsFastAutoencoder") -> None:
+        assert self.W_dec.grad is not None and self._norms is not None
+        W_dW_sum = (
+            (self.W_dec.data * self.W_dec.grad)
+            .sum(dim=1, keepdim=True)
+            .broadcast_to(self.n_features, self.d_model)
+        )
+        BLOCK_A = 64
+        BLOCK_B = 64
+        grid = lambda META: (
+            triton.cdiv(self.n_features, META["BLOCK_A"]),
+            triton.cdiv(self.d_model, META["BLOCK_B"]),
+        )
+        _unit_normalize_w_bwd_kernel[grid](
+            unit_norm_w_ptr=self.W_dec.data,
+            dw_ptr=self.W_dec.grad,
+            w_dw_sum_ptr=W_dW_sum,
+            stride_unit_norm_w_a=self.W_dec.data.stride(0),
+            stride_unit_norm_w_b=self.W_dec.data.stride(1),
+            stride_dw_a=self.W_dec.grad.stride(0),
+            stride_dw_b=self.W_dec.grad.stride(1),
+            stride_w_dw_sum_a=W_dW_sum.stride(0),
+            stride_w_dw_sum_b=W_dW_sum.stride(1),
+            dim_a=self.n_features,
+            dim_b=self.d_model,
+            BLOCK_A=BLOCK_A,
+            BLOCK_B=BLOCK_B,
+        )
+        self.W_dec.grad /= self._norms
 
     def encode(self, x: at.TmsActivations):
         topk_idxs, topk_vals, auxk_idxs, auxk_vals, _stats = fast_encoder_autograd(

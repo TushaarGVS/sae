@@ -337,12 +337,12 @@ class JumpReLU(autograd.Function):
 jumprelu = JumpReLU.apply
 
 
-@torch.compile(fullgraph=True, backend="inductor")
+# @torch.compile(fullgraph=True, backend="inductor")
 def _topk_fwd_kernel(
     x: Float[torch.Tensor, "*b m"],
     k: int,
     bias: Float[torch.Tensor, "m"] | None = None,
-    BLOCK_M: tl.constexpr | None = None,
+    BLOCK_K: tl.constexpr | None = None,
 ) -> Tuple[Float[torch.Tensor, "*b k"], Float[torch.Tensor, "*b k"]]:
     if bias is not None:
         x = x + bias
@@ -351,9 +351,10 @@ def _topk_fwd_kernel(
     topk_vals = topk_.values
     act_topk_vals = torch.empty_like(topk_vals)
     # Grid: (topk_vals_numel/dim_m,) blocks, with `dim_m` elements per block.
-    if BLOCK_M is None:
-        BLOCK_M = triton.next_power_of_2(topk_vals.shape[-1])
-    _relu_fwd_kernel[(triton.cdiv(topk_vals.numel(), BLOCK_M),)](
+    if BLOCK_K is None:
+        BLOCK_K = triton.next_power_of_2(topk_vals.shape[-1])
+    grid = lambda META: (triton.cdiv(topk_vals.numel(), META["BLOCK_M"]),)
+    _relu_fwd_kernel[grid](
         x_ptr=topk_vals,
         bias_ptr=None,
         y_ptr=act_topk_vals,
@@ -362,7 +363,7 @@ def _topk_fwd_kernel(
         stride_y_m=act_topk_vals.stride(-1),
         x_numel=topk_vals.numel(),
         dim_m=topk_vals.shape[-1],
-        BLOCK_M=BLOCK_M,
+        BLOCK_M=BLOCK_K,
     )
 
     # Note: `act_topk_vals` could have zero values from both `topk` and `relu`; this is
@@ -461,7 +462,7 @@ class BatchTopK(autograd.Function):
             x=rearrange(x, "b l m -> l (b m)", m=dim_m),
             k=(k * batch),
             bias=(None if bias is None else bias.broadcast_to(batch, dim_m).flatten()),
-            BLOCK_M=triton.next_power_of_2(dim_m),
+            BLOCK_K=triton.next_power_of_2(dim_m),
         )
 
         ctx.save_for_backward(topk_idxs, act_topk_vals)

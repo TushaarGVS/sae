@@ -1,14 +1,25 @@
 # Adapted from: https://colab.research.google.com/drive/15S4ISFVMQtfc0FPi29HRaX03dWxL65zx.
 #
-# python scripts/train_tms_model.py                     \
-# --d_model 2                                           \
-# --n_features 5                                        \
-# --feature_proba 0.01                                  \
-# --batch_size 1024                                     \
-# --steps 10_000                                        \
-# --lr 1e-3                                             \
-# --model_save_path "artefacts/toy_model-spars=0.99"    \
-# --log_freq 100                                        \
+# python scripts/train_tms_model.py                                     \
+# --d_model 2                                                           \
+# --n_features 5                                                        \
+# --feature_proba 0.01                                                  \
+# --batch_size 1024                                                     \
+# --steps 10_000                                                        \
+# --lr 1e-3                                                             \
+# --model_save_path "artefacts/toy_model-n_feat=5-d_model=2-spars=0.99" \
+# --log_freq 100                                                        \
+# --fast
+#
+# python scripts/train_tms_model.py                                         \
+# --d_model 32                                                              \
+# --n_features 1024                                                         \
+# --feature_proba 0.01                                                      \
+# --batch_size 4096                                                         \
+# --steps 30_000                                                            \
+# --lr 1e-3                                                                 \
+# --model_save_path "artefacts/toy_model-n_feat=1024-d_model=32-spars=0.99" \
+# --log_freq 100                                                            \
 # --fast
 
 from argparse import ArgumentParser
@@ -110,7 +121,9 @@ if __name__ == "__main__":
     parser.add_argument("--fast", action="store_true", help="Train using fast model.")
     args = parser.parse_args()
 
-    # 10,000 steps: loss=0.000184, lr=6.12e-20.
+    # n_feat=5-d_model=2-spars=0.99: 10,000 steps, loss=0.000184, lr=6.12e-20.
+    # n_feat=100-d_model=6-spars=0.96: 20,000 steps, loss=0.0103, lr=6.12e-20.
+    # n_feat=1024-d_model=32-spars=0.99: 30,000 steps, loss=0.00253, lr=2.83e-19.
     main(
         d_model=args.d_model,
         n_features=args.n_features,

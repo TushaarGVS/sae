@@ -22,7 +22,9 @@ class ToyModel(nn.Module):
         torch.save(self.state_dict(), model_filepath)
 
     def from_pretrained(self, model_filepath: str):
-        state_dict = torch.load(model_filepath, map_location=torch.device("cpu"))
+        state_dict = torch.load(
+            model_filepath, map_location=torch.device("cpu"), weights_only=True
+        )
         self.load_state_dict(state_dict)
 
     def forward(self, x: at.TmsFeatures) -> at.TmsFeatures:
@@ -55,7 +57,9 @@ class FastToyModel(nn.Module):
         torch.save(self.state_dict(), model_filepath)
 
     def from_pretrained(self, model_filepath: str):
-        state_dict = torch.load(model_filepath, map_location=torch.device("cpu"))
+        state_dict = torch.load(
+            model_filepath, map_location=torch.device("cpu"), weights_only=True
+        )
         self.load_state_dict(state_dict)
 
     def forward(self, x: at.TmsFeatures) -> at.TmsFeatures:
