@@ -51,17 +51,14 @@ def test_mse_aux_loss() -> None:
     recons_loss, auxk_loss = mse_auxk_loss(recons, auxk_recons, acts)
     max_abs_err_loss = torch.abs(recons_loss - recons_loss_ref).item()
     max_abs_err_auxk = torch.abs(auxk_loss - auxk_loss_ref).item()
-    print(2)
 
     dloss = autograd.grad(recons_loss, recons, retain_graph=True)[0]
     dloss_ref = autograd.grad(recons_loss_ref, recons, retain_graph=True)[0]
     max_abs_err_drecons = torch.max(torch.abs(dloss - dloss_ref)).item()
-    print(3)
 
     dauxk = autograd.grad(auxk_loss, auxk_recons, retain_graph=True)[0]
     dauxk_ref = autograd.grad(auxk_loss_ref, auxk_recons, retain_graph=True)[0]
     max_abs_err_dauxk = torch.max(torch.abs(dauxk - dauxk_ref)).item()
-    print(4)
 
     print(f"recons_numel={recons.numel()}, {recons.dtype=}, {recons.shape=}")
     print(f"{recons_loss.dtype=}, {recons_loss.shape=}")

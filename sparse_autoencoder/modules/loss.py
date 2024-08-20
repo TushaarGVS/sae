@@ -125,40 +125,57 @@ def _mse_auxk_loss_fp16_fwd_kernel(
 
     offsets_d = pid_d * BLOCK_D + tl.arange(0, BLOCK_D)
     mask_d = offsets_d < dim_d
-    offsets_batch = tl.arange(0, BLOCK_BATCH)
-    mask_batch = offsets_batch < batch
-    mask = mask_d[None] & mask_batch[:, None]
 
-    acts_ptrs = (
-        acts_ptr
-        + offsets_d[None] * stride_acts_d
-        + offsets_batch[:, None] * stride_acts_batch
-    )
-    model_recons_ptrs = (
-        model_recons_ptr
-        + offsets_d[None] * stride_model_recons_d
-        + offsets_batch[:, None] * stride_model_recons_batch
-    )
-    auxk_recons_ptrs = (
-        auxk_recons_ptr
-        + offsets_d[None] * stride_auxk_recons_d
-        + offsets_batch[:, None] * stride_auxk_recons_batch
-    )
-    acts = tl.load(acts_ptrs, mask=mask).to(tl.float32)
-    model_recons = tl.load(model_recons_ptrs, mask=mask).to(tl.float32)
-    auxk_recons = tl.load(auxk_recons_ptrs, mask=mask).to(tl.float32)
+    auxk_recons_dim0_mu = tl.zeros((BLOCK_D,), dtype=tl.float32)
+    for batch_idx in range(0, batch, BLOCK_BATCH):
+        offsets_batch = batch_idx + tl.arange(0, BLOCK_BATCH)
+        mask_batch = offsets_batch < batch
+        mask = mask_d[None] & mask_batch[:, None]
 
-    acts_model_recons_diff = acts - model_recons
-    mse = _mse(acts_model_recons_diff, dim_d * batch)
-    tl.atomic_add(recons_loss_ptr, mse)
+        auxk_recons_ptrs = (
+            auxk_recons_ptr
+            + offsets_d[None] * stride_auxk_recons_d
+            + offsets_batch[:, None] * stride_auxk_recons_batch
+        )
+        auxk_recons = tl.load(auxk_recons_ptrs, mask=mask).to(tl.float32)
+        auxk_recons_dim0_mu += tl.sum(auxk_recons, axis=0) / batch
 
-    auxk_loss_num = _unnorm_mse(auxk_recons - acts_model_recons_diff)
-    tl.atomic_add(auxk_loss_num_ptr, auxk_loss_num)
-    # Note: `auxk_recons_dim0_mu` is populated across the whole grid, it's important
-    # to remove the `mask` values.
-    auxk_recons_dim0_mu = tl.sum(auxk_recons, axis=0) * mask / batch
-    auxk_loss_denom = _unnorm_mse(auxk_recons_dim0_mu - acts_model_recons_diff)
-    tl.atomic_add(auxk_loss_denom_ptr, auxk_loss_denom)
+    for batch_idx in range(0, batch, BLOCK_BATCH):
+        offsets_batch = batch_idx + tl.arange(0, BLOCK_BATCH)
+        mask_batch = offsets_batch < batch
+        mask = mask_d[None] & mask_batch[:, None]
+
+        acts_ptrs = (
+            acts_ptr
+            + offsets_d[None] * stride_acts_d
+            + offsets_batch[:, None] * stride_acts_batch
+        )
+        model_recons_ptrs = (
+            model_recons_ptr
+            + offsets_d[None] * stride_model_recons_d
+            + offsets_batch[:, None] * stride_model_recons_batch
+        )
+        auxk_recons_ptrs = (
+            auxk_recons_ptr
+            + offsets_d[None] * stride_auxk_recons_d
+            + offsets_batch[:, None] * stride_auxk_recons_batch
+        )
+        acts = tl.load(acts_ptrs, mask=mask).to(tl.float32)
+        model_recons = tl.load(model_recons_ptrs, mask=mask).to(tl.float32)
+        auxk_recons = tl.load(auxk_recons_ptrs, mask=mask).to(tl.float32)
+
+        acts_model_recons_diff = acts - model_recons
+        mse = _mse(acts_model_recons_diff, batch * dim_d)
+        tl.atomic_add(recons_loss_ptr, mse)
+
+        auxk_loss_num = _unnorm_mse(auxk_recons - acts_model_recons_diff)
+        tl.atomic_add(auxk_loss_num_ptr, auxk_loss_num)
+        # Note: `auxk_recons_dim0_mu` is populated across the whole grid, it's important
+        # to remove the `mask` values.
+        auxk_loss_denom = _unnorm_mse(
+            auxk_recons_dim0_mu * mask - acts_model_recons_diff
+        )
+        tl.atomic_add(auxk_loss_denom_ptr, auxk_loss_denom)
 
 
 class MseAuxKLoss(autograd.Function):
@@ -192,7 +209,7 @@ class MseAuxKLoss(autograd.Function):
         auxk_loss_num = torch.tensor(0.0, dtype=fp32, device=device)
         auxk_loss_denom = torch.tensor(0.0, dtype=fp32, device=device)
 
-        BLOCK_BATCH = triton.next_power_of_2(batch)
+        BLOCK_BATCH = min(triton.next_power_of_2(batch), 512)
         BLOCK_D = 64
         grid = lambda META: (triton.cdiv(dim_d, BLOCK_D),)
         _mse_auxk_loss_fp16_fwd_kernel[grid](

@@ -107,7 +107,7 @@ def train_tms_sae(
             group["lr"] = step_lr
 
         optim.zero_grad(set_to_none=True)
-        with torch.inference_mode():
+        with torch.no_grad():
             feature_batch: Float[torch.Tensor, "*b f"] = generate_feature_batch(
                 batch_size=batch_size,
                 n_features=n_features,
@@ -125,7 +125,7 @@ def train_tms_sae(
                 - sae.pre_bias.detach()
             )
             _mse_loss, _auxk_loss = mse_auxk_loss(recons, auxk_recons, activations)
-            loss = _mse_loss + auxk_coeff * _auxk_loss
+            loss = mse_scale * _mse_loss + auxk_coeff * _auxk_loss
             logger.lazy_log_kv("train_recons", _mse_loss)
             logger.lazy_log_kv("train_auxk_recons", _auxk_loss)
 
