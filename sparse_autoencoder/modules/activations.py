@@ -337,7 +337,7 @@ class JumpReLU(autograd.Function):
 jumprelu = JumpReLU.apply
 
 
-# @torch.compile(fullgraph=True, backend="inductor")
+@torch.compile(fullgraph=True, backend="inductor")
 def _topk_fwd_kernel(
     x: Float[torch.Tensor, "*b m"],
     k: int,

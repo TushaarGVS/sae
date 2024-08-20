@@ -7,7 +7,7 @@ import torch
 from jaxtyping import Float
 from tqdm import trange
 
-from sparse_autoencoder.modules.loss import mse_loss
+from sparse_autoencoder.modules.loss import mse_auxk_loss, mse_loss
 from sparse_autoencoder.modules.sparse_matmul import coo_sparse_dense_matmul
 from sparse_autoencoder.tms.sae import TmsFastAutoencoder, TmsAutoencoder
 from sparse_autoencoder.tms.toy_model import FastToyModel
@@ -23,12 +23,16 @@ def _get_grad_norm(sae: TmsFastAutoencoder | TmsAutoencoder) -> torch.Tensor:
     return total_sq_norm.sqrt()
 
 
-def auxk_loss(
+def auxk_recons_loss(
     auxk_recons: torch.Tensor, model_recon_err: Float[torch.Tensor, "*b d"]
 ) -> torch.Tensor:
+    """
+    auxk_recons = sae.decode(auxk_idxs, auxk_vals) - sae.pre_bias.detach()
+    model_recon_err = activations - recons.detach()
+    """
     recon_err_mu = model_recon_err.mean(dim=0)
     loss = mse_loss(auxk_recons, model_recon_err) / mse_loss(
-        recon_err_mu[None, :].broadcast_to(model_recon_err.shape), model_recon_err
+        recon_err_mu[None].broadcast_to(model_recon_err.shape), model_recon_err
     )
     return loss
 
@@ -39,7 +43,8 @@ def train_tms_sae(
     n_features: int,
     k: int,
     dead_steps_threshold: int,
-    auxk: int | None,
+    mse_scale: float = 1,
+    auxk: int | None = None,
     auxk_coeff: float = 1 / 32,
     batch_size: int = 4096,
     steps: int = 20_000,
@@ -51,6 +56,7 @@ def train_tms_sae(
     wandb_entity: str | None = None,
     run_id: str = "tms_sae",
     log_freq: int = 100,
+    profile: bool = False,
 ) -> TmsFastAutoencoder | TmsAutoencoder:
     if lr_scale is None:
         lr_scale = lambda step_steps: np.cos(
@@ -112,13 +118,14 @@ def train_tms_sae(
 
         with torch.amp.autocast(device_type="cuda"):
             recons, auxk_info = sae(activations)
-            _mse_loss = mse_loss(recons, activations)
-            _auxk_loss = auxk_coeff * auxk_loss(
-                sae.decode(auxk_info["auxk_idxs"], auxk_info["auxk_vals"])
-                - sae.pre_bias.detach(),
-                activations - recons.detach(),
-            ).nan_to_num(0)
-            loss = _mse_loss + _auxk_loss
+            auxk_recons = (
+                sae.decode(
+                    topk_idxs=auxk_info["auxk_idxs"], topk_vals=auxk_info["auxk_vals"]
+                )
+                - sae.pre_bias.detach()
+            )
+            _mse_loss, _auxk_loss = mse_auxk_loss(recons, auxk_recons, activations)
+            loss = _mse_loss + auxk_coeff * _auxk_loss
             logger.lazy_log_kv("train_recons", _mse_loss)
             logger.lazy_log_kv("train_auxk_recons", _auxk_loss)
 
@@ -160,6 +167,7 @@ if __name__ == "__main__":
         n_features=1024,
         k=4,
         dead_steps_threshold=256,
+        mse_scale=1,
         auxk=16,
         auxk_coeff=1 / 32,
         batch_size=4096,
@@ -170,6 +178,7 @@ if __name__ == "__main__":
         clip_grad=None,
         model_save_path="artefacts/sae-n_feat=1024-d_model=32-spars=0.99.pt",
         wandb_entity="xyznlp",
-        run_id="tms_sae",
+        run_id="tms_sae-n_feat=1024-d_model=32-spars=0.99",
         log_freq=100,
+        profile=True,
     )
