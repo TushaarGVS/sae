@@ -121,7 +121,7 @@ def train_tms_sae(
             schedule=profiler.schedule(
                 skip_first=10, wait=5, warmup=2, active=6, repeat=4
             ),
-            on_trace_ready=_trace_handler(trace_save_path),
+            on_trace_ready=profiler.tensorboard_trace_handler(trace_save_path),
             activities=[profiler.ProfilerActivity.CPU, profiler.ProfilerActivity.CUDA],
             record_shapes=True,
             profile_memory=True,
@@ -130,10 +130,10 @@ def train_tms_sae(
         if trace_save_path is not None
         else nullcontext()
     ) as proton:
-        if trace_save_path is not None:
-            proton.step()
-
         for step in pbar:
+            if trace_save_path is not None:
+                proton.step()
+
             step_lr = lr * lr_scale((step, steps))
             for group in optim.param_groups:
                 group["lr"] = step_lr
