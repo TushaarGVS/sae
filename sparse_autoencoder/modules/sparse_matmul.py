@@ -581,38 +581,46 @@ def _dense_transpose_sparse_matmul_fwd_kernel(
     """Computes dense.T: [A N] @ sparse: [N B] = [A B]."""
     pid_k = tl.program_id(0)
 
-    offsets_n = tl.arange(0, BLOCK_N)
-    mask_n = offsets_n < dim_n
-
-    sparse_idxs_ptrs = (
-        sparse_idxs_ptr
-        + pid_k * stride_sparse_idxs_k
-        + offsets_n * stride_sparse_idxs_n
-    )
-    sparse_vals_ptrs = (
-        sparse_vals_ptr
-        + pid_k * stride_sparse_vals_k
-        + offsets_n * stride_sparse_vals_n
-    )
-    sparse_idxs = tl.load(sparse_idxs_ptrs, mask=mask_n)
-    sparse_vals = tl.load(sparse_vals_ptrs, mask=mask_n)
-
     offsets_a = tl.arange(0, BLOCK_A)
     mask_a = offsets_a < dim_a
 
-    for n in range(dim_n):
-        sparse_val = _get_elem(sparse_vals, n, sparse_vals.dtype)
-        if sparse_val != 0:
-            dense_ptrs = dense_ptr + n * stride_dense_n + offsets_a * stride_dense_a
-            dense_row = tl.load(dense_ptrs, mask=mask_a)
+    for block_n in range(0, dim_n, BLOCK_N):
+        offsets_n = block_n + tl.arange(0, BLOCK_N)
+        mask_n = offsets_n < dim_n
 
-            sparse_idx = _get_elem(sparse_idxs, n, sparse_idxs.dtype)
-            out_ptrs = out_ptr + sparse_idx * stride_out_b + offsets_a * stride_out_a
-            tl.atomic_add(
-                out_ptrs,
-                (sparse_val * dense_row).to(out_ptr.dtype.element_ty),
-                mask=mask_a,
-            )
+        sparse_idxs_ptrs = (
+            sparse_idxs_ptr
+            + pid_k * stride_sparse_idxs_k
+            + offsets_n * stride_sparse_idxs_n
+        )
+        sparse_vals_ptrs = (
+            sparse_vals_ptr
+            + pid_k * stride_sparse_vals_k
+            + offsets_n * stride_sparse_vals_n
+        )
+        sparse_idxs = tl.load(sparse_idxs_ptrs, mask=mask_n)
+        sparse_vals = tl.load(sparse_vals_ptrs, mask=mask_n)
+
+        for n in range(block_n, block_n + BLOCK_N):
+            if n < dim_n:
+                # Note: `sparse_val` and `sparse_idx` use relative `n`, `dense_ptrs`
+                # uses absolute `n`.
+                sparse_val = _get_elem(sparse_vals, n - block_n, sparse_vals.dtype)
+                if sparse_val != 0:
+                    dense_ptrs = (
+                        dense_ptr + n * stride_dense_n + offsets_a * stride_dense_a
+                    )
+                    dense_row = tl.load(dense_ptrs, mask=mask_a)
+
+                    sparse_idx = _get_elem(sparse_idxs, n - block_n, sparse_idxs.dtype)
+                    out_ptrs = (
+                        out_ptr + sparse_idx * stride_out_b + offsets_a * stride_out_a
+                    )
+                    tl.atomic_add(
+                        out_ptrs,
+                        (sparse_val * dense_row).to(out_ptr.dtype.element_ty),
+                        mask=mask_a,
+                    )
 
 
 class DenseTransposeSparseMatmul(autograd.Function):
@@ -637,7 +645,7 @@ class DenseTransposeSparseMatmul(autograd.Function):
         out = torch.zeros(dim_a, dim_b, device=dense.device, dtype=sparse_vals.dtype)
 
         # `out` columns are processed in parallel.
-        BLOCK_N = triton.next_power_of_2(dim_n)
+        BLOCK_N = min(triton.next_power_of_2(dim_n), 2)
         BLOCK_A = triton.next_power_of_2(dim_a)
         _dense_transpose_sparse_matmul_fwd_kernel[(dim_k,)](
             dense_ptr=dense,

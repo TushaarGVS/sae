@@ -1,6 +1,7 @@
 import torch
 from jaxtyping import Float
 from torch import autograd
+from torch.profiler import profile, ProfilerActivity, record_function
 
 from sparse_autoencoder.modules.sparse_matmul import (
     coo_sparse_dense_matmul,
@@ -119,6 +120,16 @@ def test_sparse_dense_matmul() -> None:
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("highest")  # only for testing
 
-    test_coo_sparse_dense_matmul()
-    test_dense_transpose_sparse_matmul()
-    test_sparse_dense_matmul()
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        profile_memory=True,
+        record_shapes=True,
+    ) as proton:
+        with record_function("coo_sparse_dense_matmul"):
+            test_coo_sparse_dense_matmul()
+        with record_function("dense_transpose_sparse_matmul"):
+            test_dense_transpose_sparse_matmul()
+        with record_function("sparse_dense_matmul"):
+            test_sparse_dense_matmul()
+
+    proton.export_chrome_trace("artefacts/sparse_matmul_test_trace.json")
