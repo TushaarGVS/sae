@@ -1,26 +1,26 @@
 # Adapted from: https://colab.research.google.com/drive/15S4ISFVMQtfc0FPi29HRaX03dWxL65zx.
 #
-# python scripts/train_tms_model.py                                     \
-# --d_model 2                                                           \
-# --n_features 5                                                        \
-# --feature_proba 0.01                                                  \
-# --batch_size 1024                                                     \
-# --steps 10_000                                                        \
-# --lr 1e-3                                                             \
-# --model_save_path "artefacts/toy_model-n_feat=5-d_model=2-spars=0.99" \
-# --log_freq 100                                                        \
-# --fast
+# python scripts/train_tms_model.py                                       \
+#   --d_model 2                                                           \
+#   --n_features 5                                                        \
+#   --feature_proba 0.01                                                  \
+#   --batch_size 1024                                                     \
+#   --steps 10_000                                                        \
+#   --lr 1e-3                                                             \
+#   --model_save_path "artefacts/toy_model-n_feat=5-d_model=2-spars=0.99" \
+#   --log_freq 100                                                        \
+#   --fast
 #
-# python scripts/train_tms_model.py                                         \
-# --d_model 32                                                              \
-# --n_features 1024                                                         \
-# --feature_proba 0.01                                                      \
-# --batch_size 4096                                                         \
-# --steps 30_000                                                            \
-# --lr 1e-3                                                                 \
-# --model_save_path "artefacts/toy_model-n_feat=1024-d_model=32-spars=0.99" \
-# --log_freq 100                                                            \
-# --fast
+# python scripts/train_tms_model.py                                           \
+#   --d_model 32                                                              \
+#   --n_features 1024                                                         \
+#   --feature_proba 0.01                                                      \
+#   --batch_size 4096                                                         \
+#   --steps 30_000                                                            \
+#   --lr 1e-3                                                                 \
+#   --model_save_path "artefacts/toy_model-n_feat=1024-d_model=32-spars=0.99" \
+#   --log_freq 100                                                            \
+#   --fast
 
 from argparse import ArgumentParser
 
@@ -89,7 +89,7 @@ if __name__ == "__main__":
         "--feature_proba",
         type=float,
         help="Feature probability (1 - sparsity).",
-        default=0.99,
+        default=0.01,
     )
     parser.add_argument(
         "--batch_size",

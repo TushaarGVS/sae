@@ -242,28 +242,3 @@ def train_tms_sae(
     if model_save_path is not None:
         sae.save_pretrained(model_save_path)
     return sae
-
-
-if __name__ == "__main__":
-    _ = train_tms_sae(
-        toy_model_filepath="artefacts/toy_model-n_feat=1024-d_model=32-spars=0.99.pt",
-        d_model=32,
-        n_features=1024,
-        k=4,
-        dead_steps_threshold=512,
-        mse_scale=1,
-        auxk=16,
-        auxk_coeff=1 / 32,
-        batch_size=16_384,
-        steps=30_000,
-        feature_proba=0.01,
-        lr=1e-4,
-        lr_scale=None,
-        clip_grad=None,
-        model_save_path="artefacts/sae-n_feat=1024-d_model=32-spars=0.99.pt",
-        wandb_entity="xyznlp",
-        run_id="tms_sae-n_feat=1024-d_model=32-spars=0.99",
-        eval_freq=100,
-        log_freq=100,
-        trace_save_path="artefacts/sae-n_feat=1024-d_model=32-spars=0.99-trace",
-    )
