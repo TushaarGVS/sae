@@ -17,8 +17,10 @@ Notation:
 - l = sequence length
 - d = model dimension
 - f = number of feature directions
-- e = expanded autoencoder dimension
 """
+
+Fl = lambda size: jt.Float[torch.Tensor, size]
+Fl32 = lambda size: jt.Float32[torch.Tensor, size]
 
 # General (e.g., coo sparse tensors, etc.).
 CooIndices = jt.Float[torch.Tensor, "2 nnz"]
@@ -38,8 +40,12 @@ TmsSaeDecoderWeights = jt.Float[torch.Tensor, "f d"]
 
 # RecurrentGemma (RG-LRU expansion = model dimension).
 Tokens = jt.Integer[torch.Tensor, "*b l"]
-Activations = jt.Float[torch.Tensor, "*b l d"]
+RGemmaActivations = jt.Float[torch.Tensor, "*b l d"]
 
 # Sparse autoencoder.
-JumpReluThreshold = jt.Float[torch.Tensor, "e"]
-SaeActivations = jt.Float[torch.Tensor, "*b l e"]
+Features = jt.Float[torch.Tensor, "*b l f"]
+
+SaePreBias = jt.Float[torch.Tensor, "d"]
+SaeLatentBias = jt.Float[torch.Tensor, "f"]
+SaeEncoderWeights = jt.Float[torch.Tensor, "d f"]
+SaeDecoderWeights = jt.Float[torch.Tensor, "f d"]

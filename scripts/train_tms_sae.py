@@ -1,18 +1,18 @@
-# python scripts/train_tms_sae.py                                              \
-#   --tms_filepath="artefacts/toy_model-n_feat=1024-d_model=32-spars=0.99.pt"   \
-#   --d_model=32                                                               \
-#   --n_features=1024                                                          \
-#   --feature_proba=0.01                                                       \
-#   --k=4                                                                      \
-#   --dead_steps_threshold=512                                                 \
-#   --auxk=16                                                                  \
-#   --batch_size=16_384                                                        \
-#   --steps=30_000                                                             \
-#   --lr=1e-4                                                                  \
-#   --eval_freq=100                                                            \
-#   --log_freq=100                                                             \
-#   --model_save_path="artefacts/sae-n_feat=1024-d_model=32-spars=0.99.pt"     \
-#   --trace_save_path="artefacts/sae-n_feat=1024-d_model=32-spars=0.99-trace"
+# python scripts/train_tms_sae.py                                                   \
+#   --tms_filepath="artefacts/toy_model-n_feat=1024-d_model=32-spars=0.99.pt"        \
+#   --d_model=32                                                                    \
+#   --n_features=1024                                                               \
+#   --feature_proba=0.01                                                            \
+#   --k=4                                                                           \
+#   --dead_steps_threshold=512                                                      \
+#   --auxk=16                                                                       \
+#   --batch_size=16_384                                                             \
+#   --steps=30_000                                                                  \
+#   --lr=1e-4                                                                       \
+#   --eval_freq=100                                                                 \
+#   --log_freq=100                                                                  \
+#   --model_save_path="artefacts/tms_sae-n_feat=1024-d_model=32-spars=0.99.pt"      \
+#   --trace_save_path="artefacts/tms_sae-n_feat=1024-d_model=32-spars=0.99-trace"
 
 from argparse import ArgumentParser
 
