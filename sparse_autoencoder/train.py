@@ -11,6 +11,7 @@ from torch import profiler
 from tqdm import tqdm
 
 import sparse_autoencoder.array_typing as at
+from recurrentgemma.array_typing import Variant
 from sparse_autoencoder.modules.loss import mse_auxk_loss, mse_loss
 from sparse_autoencoder.modules.utils import next_power_of_2
 from sparse_autoencoder.sae import FastAutoencoder
@@ -82,7 +83,7 @@ def train_sae(
     mse_scale: float = 1,
     auxk: int | None = None,
     auxk_coeff: float = 1 / 32,
-    eval_split: float = 0.03,
+    eval_split: float = 0.01,
     batch_size: int = 8192,
     train_steps: int = 50_000,
     lr: float = 1e-3,
@@ -164,7 +165,6 @@ def train_sae(
         drop_last=False,
     )
     train_pbar = tqdm(train_activations_iter, desc="train", leave=True)
-    val_pbar = tqdm(val_activations_iter, desc="eval", leave=False)
     with (
         profiler.profile(
             schedule=profiler.schedule(
@@ -191,6 +191,7 @@ def train_sae(
             for group in optim.param_groups:
                 group["lr"] = step_lr
             logger.lazy_log_kv("step", step)
+            logger.lazy_log_kv("tokens", batch_size * step)
             logger.lazy_log_kv("step_lr", step_lr)
 
             optim.zero_grad(set_to_none=True)
@@ -250,6 +251,7 @@ def train_sae(
             if (step + 1) % eval_freq == 0 or (step + 1 == train_steps):
                 sae.eval()
                 with torch.inference_mode():
+                    val_pbar = tqdm(val_activations_iter, desc="eval", leave=False)
                     for val_activations in val_pbar:
                         val_activations = val_activations.cuda()
                         with torch.amp.autocast(device_type="cuda"):
@@ -278,24 +280,56 @@ def train_sae(
 
 
 if __name__ == "__main__":
+    from dataclasses import dataclass
+
+    @dataclass
+    class RecurrentGemmaSaeCfg:
+        # RecurrentGemma config.
+        variant: Variant = "9b"
+        data: str = "minipile"
+        d_model: int = 4_096
+
+        # Autoencoder config.
+        layer_num: int = 30
+        activation_type: Literal["mlp", "rg_lru"] = "rg_lru"
+        n_features_scale: int = 32
+        k: int = 32
+        dead_tokens_threshold: int = 10_000_000
+        auxk_coeff: float = 1 / 32
+
+        # Training config.
+        batch_size: int = 16_384
+        train_steps: int = 100_000
+        lr: float = 1e-4
+        clip_grad: float | None = 1.0
+
+    cfg = RecurrentGemmaSaeCfg()
+    run_id = (
+        f"sae-"
+        f"model=rgemma_{cfg.variant}-"
+        f"act={cfg.activation_type}-"
+        f"data={cfg.data}-"
+        f"n_feat={cfg.n_features_scale * cfg.d_model}"
+    )
+
     _ = train_sae(
-        activations_dir="/share/rush/tg352/sae/minipile/9b/artefacts",
-        layer_num=30,
-        activation_type="rg_lru",
-        d_model=4096,
-        n_features=131_072,  # 32x (d_model)
-        k=32,
-        dead_tokens_threshold=10_000_000,
-        auxk=2048,
-        auxk_coeff=(1 / 32),
-        eval_split=0.03,
-        batch_size=8192,
-        train_steps=50_000,
-        lr=1e-4,
-        clip_grad=1.0,
-        model_save_path="artefacts/rg_9b_it_sae-act=rg_lru-data=minipile-n_feat=.pt",
+        activations_dir=f"/share/rush/tg352/sae/minipile/{cfg.variant}/artefacts",
+        layer_num=cfg.layer_num,
+        activation_type=cfg.activation_type,
+        d_model=cfg.d_model,
+        n_features=(cfg.n_features_scale * cfg.d_model),
+        k=cfg.k,
+        dead_tokens_threshold=cfg.dead_tokens_threshold,
+        auxk=next_power_of_2(int(cfg.d_model / 2)),
+        auxk_coeff=cfg.auxk_coeff,
+        eval_split=0.01,
+        batch_size=cfg.batch_size,
+        train_steps=cfg.train_steps,
+        lr=cfg.lr,
+        clip_grad=cfg.clip_grad,
+        model_save_path=f"artefacts/{run_id}.pt",
         wandb_entity="xyznlp",
-        run_id="sae",
+        run_id=run_id,
         eval_freq=100,
         log_freq=100,
         trace_save_path=None,
