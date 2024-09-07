@@ -17,7 +17,7 @@ torch = "^2.4.0"
 triton = { git = "https://github.com/triton-lang/triton.git", subdirectory = "python" }
 numpy = "^1.26.4"
 blobfile = "^2.1.1"
-wandb = "^0.17.5"
+wandb = "^0.17.9"
 geom_median = { git = "https://github.com/krishnap25/geom_median.git" }
 matplotlib = "^3.9.1"
 sentencepiece = "^0.2.0"

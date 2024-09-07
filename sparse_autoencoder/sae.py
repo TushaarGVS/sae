@@ -7,18 +7,18 @@ import triton
 from torch import autograd
 from torch import nn
 from torch.amp import custom_fwd, custom_bwd
-from torch.nn.init import xavier_normal_
 
 import sparse_autoencoder.array_typing as at
 from sparse_autoencoder.modules.activations import _topk_fwd_kernel
+from sparse_autoencoder.modules.norm import _unit_normalize_w_bwd_kernel
 from sparse_autoencoder.modules.sparse_matmul import (
     sparse_dense_matmul,
     _dense_transpose_sparse_matmul_fwd_kernel,
 )
 from sparse_autoencoder.modules.utils import contiguous
 
-_zeros = lambda size: torch.zeros(size, requires_grad=True)
-_xavier_empty = lambda size: xavier_normal_(torch.empty(size, requires_grad=True))
+_zeros = lambda size: nn.Parameter(torch.zeros(size))
+_xavier_empty = lambda size: nn.Parameter(nn.init.xavier_normal_(torch.empty(size)))
 
 
 class FastEncoderAutograd(autograd.Function):
@@ -164,8 +164,35 @@ class FastAutoencoder(nn.Module):
         self._dec_norms = self.W_dec.data.norm(dim=-1, keepdim=True)  # for grad bwd
         self.W_dec.data /= self._dec_norms
 
-    def unit_norm_grad_adjustment_(self: "FastAutoEncoder") -> None:
+    def unit_norm_decoder_grad_adjustment_(self: "FastAutoEncoder") -> None:
         assert self.W_dec.grad is not None and self._dec_norms is not None
+        W_dW_sum = (
+            (self.W_dec.data * self.W_dec.grad)
+            .sum(dim=1, keepdim=True)
+            .broadcast_to(self.n_features, self.d_model)
+        )
+        BLOCK_A = 64
+        BLOCK_B = 64
+        grid = lambda META: (
+            triton.cdiv(self.n_features, META["BLOCK_A"]),
+            triton.cdiv(self.d_model, META["BLOCK_B"]),
+        )
+        _unit_normalize_w_bwd_kernel[grid](
+            unit_norm_w_ptr=self.W_dec.data,
+            dw_ptr=self.W_dec.grad,
+            w_dw_sum_ptr=W_dW_sum,
+            stride_unit_norm_w_a=self.W_dec.data.stride(0),
+            stride_unit_norm_w_b=self.W_dec.data.stride(1),
+            stride_dw_a=self.W_dec.grad.stride(0),
+            stride_dw_b=self.W_dec.grad.stride(1),
+            stride_w_dw_sum_a=W_dW_sum.stride(0),
+            stride_w_dw_sum_b=W_dW_sum.stride(1),
+            dim_a=self.n_features,
+            dim_b=self.d_model,
+            BLOCK_A=BLOCK_A,
+            BLOCK_B=BLOCK_B,
+        )
+        self.W_dec.grad /= self._dec_norms
 
     @at.typed
     def encode(self, x: at.Fl("*bl d")) -> Tuple[

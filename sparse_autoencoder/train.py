@@ -43,7 +43,10 @@ def batch_activations(
     tensors: List[at.Fl("*bl d")] = []
     running_batch_len = 0
     for filename in act_filenames:
-        act_dict = pickle.load(gzip.open(filename, "rb"))
+        try:
+            act_dict = pickle.load(gzip.open(filename, "rb"))
+        except EOFError:
+            continue
         batch_act_list: List[at.Fl("l d")] = act_dict[f"blocks.{layer_num}"][act_type]
         tensors.extend(batch_act_list)
         running_batch_len += sum(batch_act.shape[0] for batch_act in batch_act_list)
@@ -79,7 +82,7 @@ def train_sae(
     mse_scale: float = 1,
     auxk: int | None = None,
     auxk_coeff: float = 1 / 32,
-    eval_split: float = 0.05,
+    eval_split: float = 0.03,
     batch_size: int = 8192,
     train_steps: int = 50_000,
     lr: float = 1e-3,
@@ -105,7 +108,7 @@ def train_sae(
         auxk = next_power_of_2(int(d_model / 2))
     if auxk_coeff is None:
         auxk_coeff = 1 / 32
-    dead_steps_threshold = dead_tokens_threshold / batch_size
+    dead_steps_threshold = int(dead_tokens_threshold / batch_size)
     config = dict(
         activations_dir=activations_dir,
         layer_num=layer_num,
@@ -182,6 +185,7 @@ def train_sae(
                 break
             if trace_save_path is not None:
                 proton.step()
+            train_activations = train_activations.cuda()
 
             step_lr = lr * lr_scale((step, train_steps))
             for group in optim.param_groups:
@@ -247,6 +251,7 @@ def train_sae(
                 sae.eval()
                 with torch.inference_mode():
                     for val_activations in val_pbar:
+                        val_activations = val_activations.cuda()
                         with torch.amp.autocast(device_type="cuda"):
                             with profiler.record_function("val_sae_fwd"):
                                 val_recons, _ = sae(val_activations)
@@ -283,7 +288,7 @@ if __name__ == "__main__":
         dead_tokens_threshold=10_000_000,
         auxk=2048,
         auxk_coeff=(1 / 32),
-        eval_split=0.05,
+        eval_split=0.03,
         batch_size=8192,
         train_steps=50_000,
         lr=1e-4,
