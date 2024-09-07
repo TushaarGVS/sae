@@ -97,6 +97,7 @@ def train_sae(
     trace_save_path: str | None = None,
     seed: int = 4740,
 ) -> FastAutoencoder:
+    _lr_scale_id = lr_scale.__name__ if lr_scale is not None else "cosine"
     if lr_scale is None:
         lr_scale = lambda step_steps: np.cos(
             0.5 * np.pi * step_steps[0] / (step_steps[1] - 1)
@@ -123,7 +124,7 @@ def train_sae(
         eval_split=eval_split,
         batch_size=batch_size,
         lr=lr,
-        lr_scale=lr_scale.__name__ if lr_scale is not None else "cosine",
+        lr_scale=_lr_scale_id,
         clip_grad=clip_grad,
         model_save_path=model_save_path,
         run_id=run_id,
