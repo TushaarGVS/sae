@@ -30,7 +30,7 @@ class FastEncoderAutograd(autograd.Function):
     @at.typed
     def forward(
         ctx: Any,
-        x: at.Fl("*bl d"),
+        x: at.Fl("bl d"),
         pre_bias: at.SaePreBias,
         W_enc: at.SaeEncoderWeights,
         latent_bias: at.SaeLatentBias,
@@ -39,10 +39,10 @@ class FastEncoderAutograd(autograd.Function):
         stats_last_nonzero: at.Fl("f"),
         dead_steps_threshold: int,
     ) -> Tuple[
-        at.Fl("*bl k"),
-        at.Fl("*bl k"),
-        at.Fl("*bl auxk") | None,
-        at.Fl("*bl auxk") | None,
+        at.Fl("bl k"),
+        at.Fl("bl k"),
+        at.Fl("bl auxk") | None,
+        at.Fl("bl auxk") | None,
         at.Fl("f"),
     ]:
         x -= pre_bias
@@ -74,7 +74,7 @@ class FastEncoderAutograd(autograd.Function):
     @custom_bwd(device_type="cuda")
     @at.typed
     def backward(
-        ctx: Any, _, dtopk_vals: at.Fl("*bl k"), __, dauxk_vals: at.Fl("*bl auxk"), ___
+        ctx: Any, _, dtopk_vals: at.Fl("bl k"), __, dauxk_vals: at.Fl("bl auxk"), ___
     ) -> Tuple[None, at.Fl("d"), at.Fl("d f"), at.Fl("f"), None, None, None, None]:
         """
         dpre_bias = -(dy @ W_enc.T).sum(0) = -dy.sum(0) @ W_enc.T
@@ -83,8 +83,8 @@ class FastEncoderAutograd(autograd.Function):
         """
         x_pre_bias_diff, W_enc, topk_idxs, auxk_idxs = ctx.saved_tensors
         if auxk_idxs is not None:
-            topk_idxs: at.Fl("*bl k_auxk") = torch.cat([topk_idxs, auxk_idxs], -1)
-            dtopk_vals: at.Fl("*bl k_auxk") = torch.cat([dtopk_vals, dauxk_vals], -1)
+            topk_idxs: at.Fl("bl k_auxk") = torch.cat([topk_idxs, auxk_idxs], -1)
+            dtopk_vals: at.Fl("bl k_auxk") = torch.cat([dtopk_vals, dauxk_vals], -1)
 
         n_features = W_enc.shape[-1]
         dy_sum0 = torch.zeros(n_features, dtype=torch.float32, device=dtopk_vals.device)
@@ -195,11 +195,11 @@ class FastAutoencoder(nn.Module):
         self.W_dec.grad /= self._dec_norms
 
     @at.typed
-    def encode(self, x: at.Fl("*bl d")) -> Tuple[
-        at.Fl("*bl k"),
-        at.Fl("*bl k"),
-        at.Fl("*bl auxk") | None,
-        at.Fl("*bl auxk") | None,
+    def encode(self, x: at.Fl("bl d")) -> Tuple[
+        at.Fl("bl k"),
+        at.Fl("bl k"),
+        at.Fl("bl auxk") | None,
+        at.Fl("bl auxk") | None,
     ]:
         topk_idxs, topk_vals, auxk_idxs, auxk_vals, _stats = fast_encoder_autograd(
             x,
@@ -216,14 +216,14 @@ class FastAutoencoder(nn.Module):
 
     @at.typed
     def decode(
-        self, topk_idxs: at.Fl("*bl k"), topk_vals: at.Fl("*bl k")
-    ) -> at.Fl("*bl d"):
+        self, topk_idxs: at.Fl("bl k"), topk_vals: at.Fl("bl k")
+    ) -> at.Fl("bl d"):
         return sparse_dense_matmul(topk_idxs, topk_vals, self.W_dec, self.pre_bias)
 
     @at.typed
     def forward(
-        self, x: at.Fl("*bl d")
-    ) -> Tuple[at.Fl("*bl d"), Dict[str, at.Fl("*bl auxk") | None]]:
+        self, x: at.Fl("bl d")
+    ) -> Tuple[at.Fl("bl d"), Dict[str, at.Fl("bl auxk") | None]]:
         topk_idxs, topk_vals, auxk_idxs, auxk_vals = self.encode(x)
-        recons: at.Fl("*bl d") = self.decode(topk_idxs, topk_vals)
+        recons: at.Fl("bl d") = self.decode(topk_idxs, topk_vals)
         return recons, dict(auxk_idxs=auxk_idxs, auxk_vals=auxk_vals)

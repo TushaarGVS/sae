@@ -41,12 +41,12 @@ def batch_activations(
     - rnn layers: 0, 30
     - attention layers: 2, 29 (= rg_lru is none)
     """
-    tensors: List[at.Fl("*bl d")] = []
+    tensors: List[at.Fl("bl d")] = []
     running_batch_len = 0
     for filename in act_filenames:
         try:
             act_dict = pickle.load(gzip.open(filename, "rb"))
-        except EOFError:
+        except:
             continue
         batch_act_list: List[at.Fl("l d")] = act_dict[f"blocks.{layer_num}"][act_type]
         tensors.extend(batch_act_list)
@@ -94,9 +94,11 @@ def train_sae(
     run_id: str = "sae",
     eval_freq: int = 100,
     log_freq: int = 100,
+    save_freq: int = 100,
     trace_save_path: str | None = None,
     seed: int = 4740,
 ) -> FastAutoencoder:
+    _ckpt_save_path = model_save_path.rsplit(".", 1)[0]
     _lr_scale_id = lr_scale.__name__ if lr_scale is not None else "cosine"
     if lr_scale is None:
         lr_scale = lambda step_steps: np.cos(
@@ -151,14 +153,6 @@ def train_sae(
     num_val_files = int(len(activation_filenames) * eval_split)
     train_activations_iter = batch_activations(
         act_filenames=activation_filenames[num_val_files:],
-        batch_size=batch_size,
-        layer_num=layer_num,
-        act_type=activation_type,
-        stream=None,
-        drop_last=False,
-    )
-    val_activations_iter = batch_activations(
-        act_filenames=activation_filenames[:num_val_files],
         batch_size=batch_size,
         layer_num=layer_num,
         act_type=activation_type,
@@ -249,9 +243,17 @@ def train_sae(
             scaler.step(optim)
             scaler.update()
 
-            if (step + 1) % eval_freq == 0 or (step + 1 == train_steps):
+            if (step + 1) % eval_freq == 0:
                 sae.eval()
                 with torch.inference_mode():
+                    val_activations_iter = batch_activations(
+                        act_filenames=activation_filenames[:num_val_files],
+                        batch_size=batch_size,
+                        layer_num=layer_num,
+                        act_type=activation_type,
+                        stream=None,
+                        drop_last=False,
+                    )
                     val_pbar = tqdm(val_activations_iter, desc="eval", leave=False)
                     for val_activations in val_pbar:
                         val_activations = val_activations.cuda()
@@ -274,7 +276,34 @@ def train_sae(
             logger.dump_lazy_logged_kvs()
             if (step + 1) % log_freq == 0 or (step + 1 == train_steps):
                 train_pbar.set_postfix(loss=_unscaled_loss, lr=step_lr)
+            if (step + 1) % save_freq == 0 and model_save_path is not None:
+                sae.save_pretrained(f"{_ckpt_save_path}.ckpt{step}.pt")
 
+    # Run one final evaluation to record model performance.
+    sae.eval()
+    with torch.inference_mode():
+        val_activations_iter = batch_activations(
+            act_filenames=activation_filenames[:num_val_files],
+            batch_size=batch_size,
+            layer_num=layer_num,
+            act_type=activation_type,
+            stream=None,
+            drop_last=False,
+        )
+        val_pbar = tqdm(val_activations_iter, desc="eval", leave=False)
+        for val_activations in val_pbar:
+            val_activations = val_activations.cuda()
+            with torch.amp.autocast(device_type="cuda"):
+                with profiler.record_function("val_sae_fwd"):
+                    val_recons, _ = sae(val_activations)
+                with profiler.record_function("val_loss"):
+                    loss = mse_loss(val_recons, val_activations).item()
+                    frac_neurons_dead = (
+                        torch.sum(sae.stats_last_nonzero > dead_steps_threshold).item()
+                        / n_features
+                    )
+                    logger.lazy_log_kv("val_recons", loss)
+                    logger.lazy_log_kv("val_frac_neurons_dead", frac_neurons_dead)
     if model_save_path is not None:
         sae.save_pretrained(model_save_path)
     return sae
@@ -332,6 +361,7 @@ if __name__ == "__main__":
         wandb_entity="xyznlp",
         run_id=run_id,
         eval_freq=100,
-        log_freq=100,
+        log_freq=10,
+        save_freq=500,
         trace_save_path=None,
     )
