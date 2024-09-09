@@ -126,19 +126,26 @@ def _mse_auxk_loss_fp16_fwd_kernel(
     offsets_d = pid_d * BLOCK_D + tl.arange(0, BLOCK_D)
     mask_d = offsets_d < dim_d
 
-    auxk_recons_dim0_mu = tl.zeros((BLOCK_D,), dtype=tl.float32)
+    acts_model_recons_diff_dim0_mu = tl.zeros((BLOCK_D,), dtype=tl.float32)
     for batch_idx in range(0, batch, BLOCK_BATCH):
         offsets_batch = batch_idx + tl.arange(0, BLOCK_BATCH)
         mask_batch = offsets_batch < batch
         mask = mask_d[None] & mask_batch[:, None]
 
-        auxk_recons_ptrs = (
-            auxk_recons_ptr
-            + offsets_d[None] * stride_auxk_recons_d
-            + offsets_batch[:, None] * stride_auxk_recons_batch
+        acts_ptrs = (
+            acts_ptr
+            + offsets_d[None] * stride_acts_d
+            + offsets_batch[:, None] * stride_acts_batch
         )
-        auxk_recons = tl.load(auxk_recons_ptrs, mask=mask).to(tl.float32)
-        auxk_recons_dim0_mu += tl.sum(auxk_recons, axis=0) / batch
+        model_recons_ptrs = (
+            model_recons_ptr
+            + offsets_d[None] * stride_model_recons_d
+            + offsets_batch[:, None] * stride_model_recons_batch
+        )
+        acts = tl.load(acts_ptrs, mask=mask).to(tl.float32)
+        model_recons = tl.load(model_recons_ptrs, mask=mask).to(tl.float32)
+        acts_model_recons_diff = acts - model_recons
+        acts_model_recons_diff_dim0_mu += tl.sum(acts_model_recons_diff, axis=0) / batch
 
     for batch_idx in range(0, batch, BLOCK_BATCH):
         offsets_batch = batch_idx + tl.arange(0, BLOCK_BATCH)
@@ -170,10 +177,10 @@ def _mse_auxk_loss_fp16_fwd_kernel(
 
         auxk_loss_num = _unnorm_mse(auxk_recons - acts_model_recons_diff)
         tl.atomic_add(auxk_loss_num_ptr, auxk_loss_num)
-        # Note: `auxk_recons_dim0_mu` is populated across the whole grid, it's important
-        # to remove the `mask` values.
+        # Note: `acts_model_recons_diff_dim0_mu` is populated across the whole grid,
+        # it's important to remove the `mask` values.
         auxk_loss_denom = _unnorm_mse(
-            auxk_recons_dim0_mu * mask - acts_model_recons_diff
+            acts_model_recons_diff_dim0_mu * mask - acts_model_recons_diff
         )
         tl.atomic_add(auxk_loss_denom_ptr, auxk_loss_denom)
 
@@ -188,7 +195,7 @@ class MseAuxKLoss(autograd.Function):
     - model_recon_error = target - output
     - mse_loss = mse(output, target)
     - auxk_loss = mse(auxk_recons, model_recon_error) /
-                    mse(auxk_recons.mean(dim=0), model_recon_error)
+                    mse(model_recon_error.mean(dim=0), model_recon_error)
     """
 
     @staticmethod
@@ -232,9 +239,7 @@ class MseAuxKLoss(autograd.Function):
         )
         auxk_loss = (auxk_loss_num / auxk_loss_denom).nan_to_num(0)
 
-        ctx.save_for_backward(
-            model_recons, auxk_recons, acts, auxk_loss_num, auxk_loss_denom
-        )
+        ctx.save_for_backward(model_recons, auxk_recons, acts, auxk_loss_denom)
         return recons_loss, auxk_loss
 
     @staticmethod
@@ -249,30 +254,15 @@ class MseAuxKLoss(autograd.Function):
         No backpropagation through (acts - model_recons) in auxk_loss computation.
 
         dmodel_recons = drecons_loss * [(1 / batch * dim_d) * 2 * -acts_recons_diff]
-        dauxk_recons = dauxk_loss * [
-            2 * auxk_model_err_diff * (1 / auxk_loss_denom) +
-            (2 * auxk_mu_model_err_diff).sum(0).broadcast_to(batch, dim_d) / batch *
-                -(auxk_loss_num / auxk_loss_denom**2)
-        ]
+        dauxk_recons = dauxk_loss * 2 * auxk_model_err_diff * (1 / auxk_loss_denom)
         """
-        model_recons, auxk_recons, acts, auxk_loss_num, auxk_loss_denom = (
-            ctx.saved_tensors
-        )
+        model_recons, auxk_recons, acts, auxk_loss_denom = ctx.saved_tensors
         batch, dim_d = model_recons.shape
         acts_recons_diff = (acts - model_recons).float()
         auxk_model_err_diff = (auxk_recons - acts_recons_diff).float()
-        auxk_mu_model_err_diff = (
-            auxk_recons.mean(dim=0).broadcast_to(batch, dim_d) - acts_recons_diff
-        ).float()
 
         dmodel_recons = -2 * drecons_loss.item() * acts_recons_diff / (batch * dim_d)
-        dauxk_recons_num = 2 * auxk_model_err_diff * (1 / auxk_loss_denom)
-        dauxk_recons_denom = (
-            (2 * auxk_mu_model_err_diff).sum(0).broadcast_to(batch, dim_d)
-            / batch
-            * -(auxk_loss_num / auxk_loss_denom**2)
-        )
-        dauxk_recons = dauxk_loss.item() * (dauxk_recons_num + dauxk_recons_denom)
+        dauxk_recons = 2 * dauxk_loss.item() * auxk_model_err_diff / auxk_loss_denom
         return dmodel_recons, dauxk_recons, None
 
 

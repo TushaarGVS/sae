@@ -44,8 +44,9 @@ def test_mse_aux_loss() -> None:
     acts = get_fl_tensor(torch.Size([batch, dim_d]), factory_kwargs=_factory_kwargs)
     acts.requires_grad = False
     recons_loss_ref = _mse_ref(recons, acts)
-    auxk_loss_ref = _unnorm_mse_ref(auxk_recons, acts - recons) / _unnorm_mse_ref(
-        auxk_recons.mean(dim=0)[None].broadcast_to(recons.shape), acts - recons.detach()
+    auxk_loss_ref = _mse_ref(auxk_recons, acts - recons.detach()) / _mse_ref(
+        (acts - recons.detach()).mean(dim=0)[None].broadcast_to(recons.shape),
+        acts - recons.detach(),
     )
 
     recons_loss, auxk_loss = mse_auxk_loss(recons, auxk_recons, acts)
