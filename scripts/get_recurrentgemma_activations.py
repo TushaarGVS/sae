@@ -20,6 +20,16 @@
 #   --variant "2b"                                  \
 #   --layer_nums 0 2 20 21                          \
 #   --save_dir "/share/rush/tg352/sae/minipile/2b"
+#
+# CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
+# scripts/get_recurrentgemma_activations.py         \
+#   --hf_dataset_id "JeanKaddour/minipile"          \
+#   --text_colname "text"                           \
+#   --per_device_batch_size 1                       \
+#   --max_len 8192                                  \
+#   --variant "9b"                                  \
+#   --layer_nums 30                                 \
+#   --save_dir "/share/rush/tg352/sae/minipile/9b"
 
 import gzip
 import json

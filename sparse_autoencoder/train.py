@@ -90,6 +90,7 @@ def train_sae(
     lr_scale: Callable[[Tuple[int, int]], float] | None = None,
     clip_grad: float | None = None,
     model_save_path: str | None = None,
+    model_ckpt_path: str | None = None,
     wandb_entity: str | None = None,
     run_id: str = "sae",
     eval_freq: int = 100,
@@ -141,6 +142,8 @@ def train_sae(
         dead_steps_threshold=dead_steps_threshold,
         auxk=auxk,
     )
+    if model_ckpt_path is not None:
+        sae.from_pretrained(model_ckpt_path)
     sae.cuda()
 
     scaler = torch.amp.GradScaler()
@@ -316,7 +319,7 @@ if __name__ == "__main__":
     class RecurrentGemmaSaeCfg:
         # RecurrentGemma config.
         variant: Variant = "9b"
-        data: str = "minipile"
+        data: str = "minipile-110K"
         d_model: int = 4_096
 
         # Autoencoder config.
@@ -342,6 +345,7 @@ if __name__ == "__main__":
         f"n_feat={cfg.n_features_scale * cfg.d_model}"
     )
 
+    ckpt = "sae-model=rgemma_9b-act=rg_lru-data=minipile-110K-n_feat=131072.ckpt2499"
     _ = train_sae(
         activations_dir=f"/share/rush/tg352/sae/minipile/{cfg.variant}/artefacts",
         layer_num=cfg.layer_num,
@@ -358,6 +362,7 @@ if __name__ == "__main__":
         lr=cfg.lr,
         clip_grad=cfg.clip_grad,
         model_save_path=f"artefacts/{run_id}.pt",
+        model_ckpt_path=f"artefacts/{ckpt}.pt",
         wandb_entity="xyznlp",
         run_id=run_id,
         eval_freq=100,
