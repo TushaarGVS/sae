@@ -3,7 +3,7 @@ import gzip
 import pickle
 import random
 from contextlib import nullcontext
-from typing import Callable, Tuple, List, Literal
+from typing import Callable, List, Literal, Tuple
 
 import numpy as np
 import torch
@@ -246,7 +246,7 @@ def train_sae(
             scaler.step(optim)
             scaler.update()
 
-            if (step + 1) % eval_freq == 0:
+            if step % eval_freq == 0:
                 sae.eval()
                 with torch.inference_mode():
                     val_activations_iter = batch_activations(
@@ -258,6 +258,7 @@ def train_sae(
                         drop_last=False,
                     )
                     val_pbar = tqdm(val_activations_iter, desc="eval", leave=False)
+                    val_loss_vals, val_frac_neurons_dead_vals = [], []
                     for val_activations in val_pbar:
                         val_activations = val_activations.cuda()
                         with torch.amp.autocast(device_type="cuda"):
@@ -271,13 +272,18 @@ def train_sae(
                                     ).item()
                                     / n_features
                                 )
-                                logger.lazy_log_kv("val_recons", loss)
-                                logger.lazy_log_kv(
-                                    "val_frac_neurons_dead", frac_neurons_dead
-                                )
+                                val_loss_vals.append(loss)
+                                val_frac_neurons_dead_vals.append(frac_neurons_dead)
+                    logger.lazy_log_kv(
+                        "avg_val_recons", torch.tensor(val_loss_vals).mean()
+                    )
+                    logger.lazy_log_kv(
+                        "avg_val_frac_neurons_dead",
+                        torch.tensor(val_frac_neurons_dead_vals).mean(),
+                    )
 
             logger.dump_lazy_logged_kvs()
-            if (step + 1) % log_freq == 0 or (step + 1 == train_steps):
+            if step % log_freq == 0 or (step + 1 == train_steps):
                 train_pbar.set_postfix(loss=_unscaled_loss, lr=step_lr)
             if (step + 1) % save_freq == 0 and model_save_path is not None:
                 sae.save_pretrained(f"{_ckpt_save_path}.ckpt{step}.pt")
@@ -294,6 +300,7 @@ def train_sae(
             drop_last=False,
         )
         val_pbar = tqdm(val_activations_iter, desc="eval", leave=False)
+        val_loss_vals, val_frac_neurons_dead_vals = [], []
         for val_activations in val_pbar:
             val_activations = val_activations.cuda()
             with torch.amp.autocast(device_type="cuda"):
@@ -305,8 +312,14 @@ def train_sae(
                         torch.sum(sae.stats_last_nonzero > dead_steps_threshold).item()
                         / n_features
                     )
-                    logger.lazy_log_kv("val_recons", loss)
-                    logger.lazy_log_kv("val_frac_neurons_dead", frac_neurons_dead)
+                    val_loss_vals.append(loss)
+                    val_frac_neurons_dead_vals.append(frac_neurons_dead)
+        logger.lazy_log_kv("avg_val_recons", torch.tensor(val_loss_vals).mean())
+        logger.lazy_log_kv(
+            "avg_val_frac_neurons_dead", torch.tensor(val_frac_neurons_dead_vals).mean()
+        )
+        logger.dump_lazy_logged_kvs()
+
     if model_save_path is not None:
         sae.save_pretrained(model_save_path)
     return sae
@@ -345,7 +358,7 @@ if __name__ == "__main__":
         f"n_feat={cfg.n_features_scale * cfg.d_model}"
     )
 
-    ckpt = "sae-model=rgemma_9b-act=rg_lru-data=minipile-110K-n_feat=131072.ckpt2499"
+    ckpt = "sae-model=rgemma_9b-act=rg_lru-data=minipile-110K-n_feat=131072"
     _ = train_sae(
         activations_dir=f"/share/rush/tg352/sae/minipile/{cfg.variant}/artefacts",
         layer_num=cfg.layer_num,

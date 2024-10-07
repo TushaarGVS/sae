@@ -81,7 +81,7 @@ def train_tms(
         loss = loss.item()  # drop buffers
         optim.step()
 
-        if (step + 1) % log_freq == 0 or (step + 1 == steps):
+        if step % log_freq == 0 or (step + 1 == steps):
             pbar.set_postfix(loss=loss, lr=step_lr)
 
     if model_save_path is not None:

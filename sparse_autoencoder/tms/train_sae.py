@@ -12,7 +12,7 @@ from tqdm import trange
 
 from sparse_autoencoder.modules.loss import mse_auxk_loss, mse_loss
 from sparse_autoencoder.modules.sparse_matmul import coo_sparse_dense_matmul
-from sparse_autoencoder.tms.sae import TmsFastAutoencoder, TmsAutoencoder
+from sparse_autoencoder.tms.sae import TmsAutoencoder, TmsFastAutoencoder
 from sparse_autoencoder.tms.toy_model import FastToyModel
 from sparse_autoencoder.tms.train_toy_model import generate_feature_batch
 from sparse_autoencoder.utils.logger import Logger
@@ -204,7 +204,7 @@ def train_tms_sae(
             scaler.step(optim)
             scaler.update()
 
-            if (step + 1) % eval_freq == 0 or (step + 1 == steps):
+            if step % eval_freq == 0 or (step + 1 == steps):
                 sae.eval()
                 with torch.inference_mode():
                     with profiler.record_function("generate_val_activations"):
@@ -236,7 +236,7 @@ def train_tms_sae(
                             )
 
             logger.dump_lazy_logged_kvs()
-            if (step + 1) % log_freq == 0 or (step + 1 == steps):
+            if step % log_freq == 0 or (step + 1 == steps):
                 pbar.set_postfix(loss=_unscaled_loss, lr=step_lr)
 
     if model_save_path is not None:
